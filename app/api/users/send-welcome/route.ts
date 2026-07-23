@@ -25,7 +25,7 @@ Hi ${user.name},
 Welcome to iRam Route Planner!
 
 Your login credentials:
-- URL: ${process.env.NEXT_PUBLIC_APP_URL || "https://iram-route-planner.vercel.app"}
+- URL: ${process.env.NEXT_PUBLIC_APP_URL || "https://i-ram-route-planner.vercel.app"}
 - Email: ${user.email}
 - Temporary Password: ${tempPassword}
 
