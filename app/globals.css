@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* iRam corporate identity */
+@theme {
+  --color-iram-green: #7CC042;
+  --color-iram-green-dark: #5a9a2e;
+  --color-iram-green-light: #e8f5d9;
+  --color-iram-green-lighter: #f3fae9;
+  --color-iram-dark: #32373C;
+  --color-iram-grey: #828282;
+}
+
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+}
+
+/* Leaflet overrides — fix Tailwind v4 preflight breaking tiles & markers */
+.leaflet-container {
+  width: 100%;
+  height: 100%;
+  z-index: 0;
+}
+
+.leaflet-container img {
+  max-width: none !important;
+  max-height: none !important;
+}
+
+.leaflet-tile-pane img {
+  max-width: none !important;
+  max-height: none !important;
+  display: inline !important;
+}
+
+.leaflet-control-container .leaflet-control a {
+  all: unset;
+  cursor: pointer;
+}
+
+.leaflet-popup-content p {
+  margin: 0;
+}
