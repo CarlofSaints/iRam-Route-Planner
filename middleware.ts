@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 
 // /api/cron is listed here so Vercel's scheduler can reach it without a session
 // cookie — the route itself authenticates via CRON_SECRET or an admin session.
-const PUBLIC_PATHS = ["/login", "/api/auth", "/api/seed", "/api/debug", "/api/cron"];
+const PUBLIC_PATHS = ["/login", "/api/auth", "/api/seed", "/api/cron"];
 
 export function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
