@@ -1,5 +1,5 @@
 import { put, list, del } from "@vercel/blob";
-import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride } from "./types";
+import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
 import fs from "fs";
 import path from "path";
 
@@ -87,6 +87,31 @@ export async function getGeocodeCache(): Promise<Record<string, string>> {
 
 export async function saveGeocodeCache(cache: Record<string, string>): Promise<void> {
   await writeJSON("geocache", cache);
+}
+
+// ---------- Visit Roles ----------
+
+export async function getVisitRoles(): Promise<VisitRole[]> {
+  const saved = await readJSON<VisitRole[] | null>("visit-roles", null);
+  if (!saved || saved.length === 0) return DEFAULT_VISIT_ROLES;
+
+  // There must always be exactly one primary role — it is what Store.repCode
+  // means. If saved data has none (or several), fall back to the first row.
+  const primaries = saved.filter((r) => r.isPrimary);
+  if (primaries.length === 0) saved[0].isPrimary = true;
+  else if (primaries.length > 1) {
+    for (const r of primaries.slice(1)) r.isPrimary = false;
+  }
+  return saved;
+}
+
+export async function saveVisitRoles(roles: VisitRole[]): Promise<void> {
+  const primaries = roles.filter((r) => r.isPrimary);
+  if (roles.length > 0 && primaries.length === 0) roles[0].isPrimary = true;
+  else if (primaries.length > 1) {
+    for (const r of primaries.slice(1)) r.isPrimary = false;
+  }
+  await writeJSON("visit-roles", roles);
 }
 
 // ---------- Reps ----------

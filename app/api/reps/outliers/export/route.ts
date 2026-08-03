@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, getChannels, getSettings } from "@/lib/data";
+import { getReps, getStores, getChannels, getSettings, getVisitRoles } from "@/lib/data";
 import { computeOutliers } from "@/lib/outliers";
 import { resolveLocations, geoKey } from "@/lib/geocode";
 import { requireSession } from "@/lib/auth";
@@ -12,17 +12,18 @@ export async function GET(request: NextRequest) {
     await requireSession();
 
     const param = request.nextUrl.searchParams.get("radiusKm");
-    const [reps, stores, channels, settings] = await Promise.all([
+    const [reps, stores, channels, settings, visitRoles] = await Promise.all([
       getReps(),
       getStores(),
       getChannels(),
       getSettings(),
+      getVisitRoles(),
     ]);
 
     const parsed = param != null ? Number(param) : NaN;
     const radiusKm = !isNaN(parsed) && parsed > 0 ? Math.round(parsed) : settings.outlierRadiusKm;
 
-    const result = computeOutliers(reps, stores, radiusKm);
+    const result = computeOutliers(reps, stores, radiusKm, visitRoles);
     const channelName = new Map(channels.map((c) => [c.id, c.name]));
     const storeById = new Map(stores.map((s) => [s.id, s]));
 

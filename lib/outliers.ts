@@ -1,5 +1,6 @@
-import { Rep, Store } from "./types";
+import { Rep, Store, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
 import { parseLatLng, haversineKm, medianCenter } from "./route-engine";
+import { getStoresForRep, getRoleForRep } from "./repStores";
 
 export interface OutlierStore {
   repCode: string;
@@ -21,23 +22,25 @@ export interface OutlierResult {
  * measured from the rep's median store location (robust to the outliers
  * themselves). Stores already confirmed in-cycle (`rangeConfirmed`) or with
  * invalid GPS are skipped.
+ *
+ * Visit roles with `checkOutliers` off are skipped entirely: a QC or training
+ * rep covering a whole province is not misallocated, so flagging their stores
+ * would bury the genuine sales-rep exceptions in noise.
  */
 export function computeOutliers(
   reps: Rep[],
   stores: Store[],
-  radiusKm: number
+  radiusKm: number,
+  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES
 ): OutlierResult {
-  const byRep = new Map<string, Store[]>();
-  for (const s of stores) {
-    if (!byRep.has(s.repCode)) byRep.set(s.repCode, []);
-    byRep.get(s.repCode)!.push(s);
-  }
-
   const out: OutlierStore[] = [];
   const perRep: Record<string, number> = {};
 
   for (const rep of reps) {
-    const repStores = byRep.get(rep.code) || [];
+    const role = getRoleForRep(rep, visitRoles);
+    if (!role.checkOutliers) continue;
+
+    const repStores = getStoresForRep(rep, stores, role);
     const center = medianCenter(repStores);
     if (!center) continue;
 

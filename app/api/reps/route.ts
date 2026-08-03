@@ -33,6 +33,7 @@ export async function PUT(request: NextRequest) {
     if (updates.teamId !== undefined) reps[idx].teamId = updates.teamId;
     if (updates.workingHoursPerDay !== undefined) reps[idx].workingHoursPerDay = updates.workingHoursPerDay;
     if (updates.assignedChannels !== undefined) reps[idx].assignedChannels = updates.assignedChannels;
+    if (updates.visitRoleId !== undefined) reps[idx].visitRoleId = updates.visitRoleId || undefined;
     await saveReps(reps);
 
     const session = await getSession();
@@ -69,6 +70,7 @@ export async function POST(request: NextRequest) {
       homeGpsLng: body.homeGpsLng || "",
       teamId: body.teamId || "",
       workingHoursPerDay: body.workingHoursPerDay ?? 8.5,
+      ...(body.visitRoleId ? { visitRoleId: body.visitRoleId } : {}),
     };
     reps.push(newRep);
     await saveReps(reps);

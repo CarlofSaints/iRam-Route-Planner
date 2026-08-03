@@ -42,7 +42,38 @@ export interface Rep {
   teamId: string;
   workingHoursPerDay?: number; // default 8.5
   assignedChannels?: string[]; // channel IDs for channel_dedicated strategy
+  // Which kind of visit this person performs. Absent = the primary sales role,
+  // so every rep that predates visit roles keeps its existing behaviour.
+  visitRoleId?: string;
 }
+
+/**
+ * A visit role is the KIND of call a person makes on a store, not their
+ * seniority in the org. The primary role is the sales rep whose visits are
+ * driven by the store's own channel frequency; higher-level roles (QC,
+ * training) visit the same stores on their own rhythm and for their own
+ * length of time, and are linked to the store as a secondary or third rep.
+ */
+export interface VisitRole {
+  id: string;
+  name: string;
+  frequency: FrequencyType; // how often this role calls on each of its stores
+  duration: number; // minutes per visit
+  // The primary role takes its frequency and duration from the store/channel
+  // instead of from the role, and is matched via Store.repCode.
+  isPrimary: boolean;
+  // Higher-level roles legitimately cover a whole province, so out-of-range
+  // flagging would fire on nearly every store. Off by default for them.
+  checkOutliers: boolean;
+}
+
+export const PRIMARY_VISIT_ROLE_ID = "sales";
+
+export const DEFAULT_VISIT_ROLES: VisitRole[] = [
+  { id: PRIMARY_VISIT_ROLE_ID, name: "Sales Rep", frequency: "monthly", duration: 30, isPrimary: true, checkOutliers: true },
+  { id: "qc", name: "QC", frequency: "quarterly", duration: 60, isPrimary: false, checkOutliers: false },
+  { id: "training", name: "Training", frequency: "bimonthly", duration: 90, isPrimary: false, checkOutliers: false },
+];
 
 export interface Team {
   id: string;
@@ -267,6 +298,10 @@ export interface RouteDayPlan {
 export interface RepRoutePlan {
   repCode: string;
   repName: string;
+  // Which kind of call this plan is for. Absent on plans generated before
+  // visit roles existed — treat those as the primary sales role.
+  visitRoleId?: string;
+  visitRoleName?: string;
   homeLatLng: { lat: number; lng: number } | null;
   workingHoursPerDay: number;
   generatedAt: string; // ISO datetime

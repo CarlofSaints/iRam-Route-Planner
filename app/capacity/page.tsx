@@ -7,6 +7,8 @@ import { Team } from "@/lib/types";
 interface RepCapacity {
   repCode: string;
   repName: string;
+  visitRoleId?: string;
+  visitRoleName?: string;
   teamId: string;
   workingHoursPerDay: number;
   storeCount: number;
@@ -320,7 +322,14 @@ export default function CapacityPage() {
                   <tr key={r.repCode} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
                       <div className="font-medium text-gray-900">{r.repName}</div>
-                      <div className="text-xs text-gray-400 font-mono">{r.repCode}</div>
+                      <div className="text-xs text-gray-400 font-mono">
+                        {r.repCode}
+                        {r.visitRoleName && r.visitRoleId !== "sales" && (
+                          <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-sans not-italic">
+                            {r.visitRoleName}
+                          </span>
+                        )}
+                      </div>
                     </td>
                     {isAdmin && <td className="px-4 py-3 text-gray-600">{teamName(r.teamId)}</td>}
                     <td className="px-4 py-3 text-right text-gray-700">{r.storeCount}</td>

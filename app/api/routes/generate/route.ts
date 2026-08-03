@@ -1,42 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, saveRoutes, saveRoutesForType, getCallCycleTypes, getSettings } from "@/lib/data";
-import { RoutePlanDocument, RepRoutePlan, Store, Rep } from "@/lib/types";
+import { getReps, getStores, saveRoutes, saveRoutesForType, getCallCycleTypes, getSettings, getVisitRoles } from "@/lib/data";
+import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
+import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
 import { hasGoogleMapsKey } from "@/lib/google-maps";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 
 export const maxDuration = 120;
 
-function getStoresForRep(
-  rep: Rep,
-  allStores: Store[],
-  strategy: string | null
-): Store[] {
-  // A rep's stores are the stores allocated to them (repCode). This is the
-  // source of truth for "which stores does this rep call on". The route engine
-  // then clusters them geographically and optimises the daily order.
-  const allocated = allStores.filter((s) => s.repCode === rep.code);
-
-  // Channel Dedicated additionally narrows the allocation to the rep's channels.
-  if (strategy === "channel_dedicated" && rep.assignedChannels?.length) {
-    return allocated.filter((s) => rep.assignedChannels!.includes(s.channelId));
-  }
-
-  // Geography / default: the rep calls on every store allocated to them.
-  return allocated;
-}
-
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json().catch(() => ({}));
     const repCodes: string[] | undefined = body.repCodes;
 
-    const [allReps, allStores, callCycleTypes, settings] = await Promise.all([
+    const [allReps, allStores, callCycleTypes, settings, visitRoles] = await Promise.all([
       getReps(),
       getStores(),
       getCallCycleTypes(),
       getSettings(),
+      getVisitRoles(),
     ]);
     const outlierRadiusKm = settings.outlierRadiusKm;
 
@@ -69,12 +52,16 @@ export async function POST(request: NextRequest) {
     const googleDeadline = Date.now() + (reps.length === 1 ? 55_000 : 45_000);
 
     for (const rep of reps) {
-      // Get stores for this rep based on active strategy
-      const repStores = getStoresForRep(rep, allStores, strategy);
+      // Stores for this rep: their visit role decides whether that means the
+      // stores they are primary on, or the ones they QC/train at.
+      const role = getRoleForRep(rep, visitRoles);
+      const repStores = getStoresForRep(rep, allStores, role, strategy);
       if (repStores.length === 0) {
         repPlans.push({
           repCode: rep.code,
           repName: rep.name,
+          visitRoleId: role.id,
+          visitRoleName: role.name,
           homeLatLng: parseHome(rep),
           workingHoursPerDay: rep.workingHoursPerDay ?? 8.5,
           generatedAt: new Date().toISOString(),
@@ -85,7 +72,7 @@ export async function POST(request: NextRequest) {
       }
 
       const plan = await generateRepRoute(rep, repStores, startTime, googleDeadline, outlierRadiusKm);
-      repPlans.push(plan);
+      repPlans.push({ ...plan, visitRoleId: role.id, visitRoleName: role.name });
     }
 
     const doc: RoutePlanDocument = {

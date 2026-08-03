@@ -1,4 +1,5 @@
-import { Rep, Store, RoutePlanDocument, getMonthlyRate } from "./types";
+import { Rep, Store, RoutePlanDocument, VisitRole, DEFAULT_VISIT_ROLES, getMonthlyRate } from "./types";
+import { getStoresForRep, getRoleForRep } from "./repStores";
 
 // A generated route document covers one 4-week cycle = one month.
 export const WORKING_DAYS_PER_MONTH = 20; // 5 days x 4 weeks
@@ -7,6 +8,8 @@ const DEFAULT_WORKING_HOURS = 8.5;
 export interface RepCapacity {
   repCode: string;
   repName: string;
+  visitRoleId: string;
+  visitRoleName: string;
   teamId: string;
   workingHoursPerDay: number;
   storeCount: number;
@@ -34,12 +37,16 @@ export interface CapacityResult {
 export function computeCapacity(
   reps: Rep[],
   stores: Store[],
-  doc: RoutePlanDocument | null
+  doc: RoutePlanDocument | null,
+  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES
 ): CapacityResult {
   const planByRep = new Map((doc?.repPlans ?? []).map((p) => [p.repCode, p]));
 
   const rows: RepCapacity[] = reps.map((rep) => {
-    const allocated = stores.filter((s) => s.repCode === rep.code);
+    // Same helper the route generator uses, so a QC rep's utilisation is
+    // measured against the QC stores and rhythm their route was built from.
+    const role = getRoleForRep(rep, visitRoles);
+    const allocated = getStoresForRep(rep, stores, role);
     const callsPerMonth = allocated.reduce(
       (sum, s) => sum + getMonthlyRate(s.frequency || "monthly"),
       0
@@ -74,6 +81,8 @@ export function computeCapacity(
     return {
       repCode: rep.code,
       repName: rep.name,
+      visitRoleId: role.id,
+      visitRoleName: role.name,
       teamId: rep.teamId,
       workingHoursPerDay,
       storeCount: allocated.length,

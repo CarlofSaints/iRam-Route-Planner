@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getReps, getStores, getRoutes, getTeams } from "@/lib/data";
+import { getReps, getStores, getRoutes, getTeams, getVisitRoles } from "@/lib/data";
 import { computeCapacity } from "@/lib/capacity";
 import { requireSession } from "@/lib/auth";
 import XLSX from "xlsx";
@@ -8,20 +8,22 @@ export async function GET() {
   try {
     await requireSession();
 
-    const [reps, stores, doc, teams] = await Promise.all([
+    const [reps, stores, doc, teams, visitRoles] = await Promise.all([
       getReps(),
       getStores(),
       getRoutes(),
       getTeams(),
+      getVisitRoles(),
     ]);
 
-    const result = computeCapacity(reps, stores, doc);
+    const result = computeCapacity(reps, stores, doc, visitRoles);
     const teamName = new Map(teams.map((t) => [t.id, t.name || t.managerName || ""]));
 
     const rows: (string | number)[][] = [
       [
         "Rep Code",
         "Rep Name",
+        "Visit Role",
         "Team",
         "Stores",
         "Calls/Month",
@@ -43,6 +45,7 @@ export async function GET() {
       rows.push([
         r.repCode,
         r.repName,
+        r.visitRoleName,
         teamName.get(r.teamId) || "Unassigned",
         r.storeCount,
         r.callsPerMonth,
@@ -61,9 +64,10 @@ export async function GET() {
 
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws["!cols"] = [
-      { wch: 12 }, { wch: 24 }, { wch: 20 }, { wch: 8 }, { wch: 11 },
-      { wch: 9 }, { wch: 20 }, { wch: 11 }, { wch: 12 }, { wch: 20 },
-      { wch: 12 }, { wch: 11 }, { wch: 17 }, { wch: 16 }, { wch: 8 },
+      { wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 20 }, { wch: 8 },
+      { wch: 11 }, { wch: 9 }, { wch: 20 }, { wch: 11 }, { wch: 12 },
+      { wch: 20 }, { wch: 12 }, { wch: 11 }, { wch: 17 }, { wch: 16 },
+      { wch: 8 },
     ];
 
     const wb = XLSX.utils.book_new();

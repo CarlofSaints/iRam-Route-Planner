@@ -1,10 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { Rep } from "@/lib/types";
+import { Rep, VisitRole } from "@/lib/types";
 
 export default function RepsPage() {
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Rep>>({});
@@ -22,7 +23,21 @@ export default function RepsPage() {
       });
   };
 
-  useEffect(() => { load(); }, []);
+  useEffect(() => {
+    load();
+    fetch("/api/visit-roles")
+      .then((r) => r.json())
+      .then((data) => setVisitRoles(Array.isArray(data) ? data : []))
+      .catch(() => setVisitRoles([]));
+  }, []);
+
+  // A rep with no visitRoleId is on the primary sales role.
+  const roleName = (id?: string) => {
+    const role = id
+      ? visitRoles.find((r) => r.id === id)
+      : visitRoles.find((r) => r.isPrimary);
+    return role?.name ?? "Sales Rep";
+  };
 
   const startEdit = (rep: Rep) => {
     setEditing(rep.id);
@@ -181,6 +196,7 @@ export default function RepsPage() {
                 <th className="px-6 py-3">Email</th>
                 <th className="px-6 py-3">Cell</th>
                 <th className="px-6 py-3">Home Address</th>
+                <th className="px-6 py-3">Visit Role</th>
                 <th className="px-6 py-3 text-center">Hours/Day</th>
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
@@ -225,6 +241,17 @@ export default function RepsPage() {
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
                       </td>
+                      <td className="px-6 py-3">
+                        <select
+                          value={editData.visitRoleId ?? ""}
+                          onChange={(e) => setEditData({ ...editData, visitRoleId: e.target.value })}
+                          className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+                        >
+                          {visitRoles.map((r) => (
+                            <option key={r.id} value={r.isPrimary ? "" : r.id}>{r.name}</option>
+                          ))}
+                        </select>
+                      </td>
                       <td className="px-6 py-3 text-center">
                         <input
                           type="number"
@@ -256,6 +283,7 @@ export default function RepsPage() {
                       <td className="px-6 py-3 text-gray-600">{rep.email || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600">{rep.cell || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600 max-w-[200px] truncate">{rep.homeAddress || <span className="text-gray-300 italic">Not set</span>}</td>
+                      <td className="px-6 py-3 text-gray-600">{roleName(rep.visitRoleId)}</td>
                       <td className="px-6 py-3 text-center text-gray-600">{rep.workingHoursPerDay ?? 8.5}</td>
                       <td className="px-6 py-3 text-right space-x-2">
                         <button onClick={() => startEdit(rep)} className="text-iram-green hover:text-red-800 text-xs font-medium">
