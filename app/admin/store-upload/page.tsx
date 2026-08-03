@@ -5,6 +5,7 @@ import { useState, useRef } from "react";
 export default function StoreUploadPage() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [templateMenu, setTemplateMenu] = useState(false);
   const [result, setResult] = useState<{ ok: boolean; message: string; headers?: string[]; skipped?: number; rowsInFile?: number } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
@@ -67,10 +68,54 @@ export default function StoreUploadPage() {
 
   return (
     <div className="p-6 max-w-2xl mx-auto">
-      <h1 className="text-xl font-bold text-gray-900 mb-1">Store Upload</h1>
-      <p className="text-sm text-gray-500 mb-6">
-        Upload an Excel file to import or update stores. Channels and reps will be auto-created if they don&apos;t exist.
-      </p>
+      <div className="flex items-start justify-between gap-4 mb-6">
+        <div>
+          <h1 className="text-xl font-bold text-gray-900 mb-1">Store Upload</h1>
+          <p className="text-sm text-gray-500">
+            Upload an Excel file to import or update stores. Channels and reps will be auto-created if they don&apos;t exist.
+          </p>
+        </div>
+        <div className="relative shrink-0">
+          <button
+            type="button"
+            onClick={() => setTemplateMenu((v) => !v)}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-white bg-iram-green hover:bg-iram-green-dark rounded-lg transition-colors"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.8}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v12m0 0l-4-4m4 4l4-4M4 20h16" />
+            </svg>
+            Export Template
+          </button>
+
+          {templateMenu && (
+            <>
+              <div className="fixed inset-0 z-10" onClick={() => setTemplateMenu(false)} />
+              <div className="absolute right-0 mt-2 w-72 bg-white border border-gray-200 rounded-lg shadow-lg z-20 overflow-hidden">
+                <a
+                  href="/api/stores/template?format=standard"
+                  onClick={() => setTemplateMenu(false)}
+                  className="block px-4 py-3 hover:bg-gray-50 border-b border-gray-100"
+                >
+                  <span className="block text-sm font-medium text-gray-800">Standard template</span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    PLACE ID / PLACE NAME / CHANNEL / reps / GPS / value
+                  </span>
+                </a>
+                <a
+                  href="/api/stores/template?format=perigee"
+                  onClick={() => setTemplateMenu(false)}
+                  className="block px-4 py-3 hover:bg-gray-50"
+                >
+                  <span className="block text-sm font-medium text-gray-800">Perigee site export</span>
+                  <span className="block text-xs text-gray-500 mt-0.5">
+                    ID / Name / Representative ID / Tags — no sales column
+                  </span>
+                </a>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
 
       {/* Drop zone */}
       <div
@@ -146,9 +191,14 @@ export default function StoreUploadPage() {
           <span>GPS LATITUDE</span>
           <span>GPS LONGITUDE</span>
           <span>MONTHLY AVERAGE / VALUE</span>
-          <span>ZONE (optional)</span>
+          <span>SECONDARY REPRESENTATIVE ID (optional)</span>
+          <span>THIRD REPRESENTATIVE ID (optional)</span>
           <span>REGION / PROVINCE / AREA (optional)</span>
         </div>
+        <p className="text-[11px] text-gray-400 mt-3">
+          Grab a pre-formatted file with Export Template above. Secondary and third reps are stored
+          against the store, but routes, capacity and the map still use the primary rep only.
+        </p>
       </div>
     </div>
   );

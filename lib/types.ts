@@ -59,7 +59,9 @@ export interface Store {
   placeId: string;
   name: string;
   channelId: string;
-  repCode: string;
+  repCode: string; // primary rep — the one routing, capacity and the map work off
+  repCode2?: string; // optional secondary rep
+  repCode3?: string; // optional third rep
   gpsLat: string;
   gpsLng: string;
   monthlySales: number;

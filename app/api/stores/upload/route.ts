@@ -52,10 +52,20 @@ export async function POST(request: NextRequest) {
       fileHeaders.some((h) => h === "Name") &&
       fileHeaders.some((h) => h === "Representative ID");
 
+    // Does this sheet carry the optional secondary/third rep columns at all?
+    // Used to distinguish "blank cell, clear the rep" from "column absent,
+    // leave whatever is already on the store alone".
+    const hasHeader = (...names: string[]) =>
+      fileHeaders.some((h) => names.some((n) => h.toLowerCase() === n.toLowerCase()));
+    const hasRep2Column = hasHeader("SECONDARY REPRESENTATIVE ID", "REP CODE 2", "REPRESENTATIVE ID 2", "Secondary Rep Code");
+    const hasRep3Column = hasHeader("THIRD REPRESENTATIVE ID", "REP CODE 3", "REPRESENTATIVE ID 3", "Third Rep Code");
+
     for (const row of rows) {
       let placeId: string, storeName: string, repCode: string, repName: string;
       let channelName: string, lat: string, lng: string, region: string;
       let rawSales: string;
+      // Secondary/third reps are optional; blank for the vast majority of stores.
+      let repCode2: string, repName2: string, repCode3: string, repName3: string;
 
       if (hasSiteExportFormat) {
         // Perigee site export format
@@ -63,6 +73,10 @@ export async function POST(request: NextRequest) {
         storeName = col(row, "Name");
         repCode = col(row, "Representative ID");
         repName = col(row, "Representative name");
+        repCode2 = col(row, "Representative ID 2");
+        repName2 = col(row, "Representative name 2");
+        repCode3 = col(row, "Representative ID 3");
+        repName3 = col(row, "Representative name 3");
         lat = col(row, "Gps latitude");
         lng = col(row, "Gps longitude");
         region = col(row, "State", "Territory");
@@ -77,6 +91,10 @@ export async function POST(request: NextRequest) {
         storeName = col(row, "PLACE NAME", "STORE NAME", "Store Name", "Place Name");
         repCode = col(row, "REPRESENTATIVE ID", "REP CODE", "Rep Code", "Representative ID");
         repName = col(row, "REPRESENTATIVE NAME", "REP NAME", "Rep Name", "Representative Name");
+        repCode2 = col(row, "SECONDARY REPRESENTATIVE ID", "REP CODE 2", "REPRESENTATIVE ID 2", "Secondary Rep Code");
+        repName2 = col(row, "SECONDARY REPRESENTATIVE NAME", "REP NAME 2", "REPRESENTATIVE NAME 2", "Secondary Rep Name");
+        repCode3 = col(row, "THIRD REPRESENTATIVE ID", "REP CODE 3", "REPRESENTATIVE ID 3", "Third Rep Code");
+        repName3 = col(row, "THIRD REPRESENTATIVE NAME", "REP NAME 3", "REPRESENTATIVE NAME 3", "Third Rep Name");
         channelName = col(row, "CHANNEL", "Channel", "CHANNEL NAME", "Channel Name");
         lat = col(row, "GPS LATITUDE", "Gps latitude", "Gps Latitude", "GPS_LATITUDE", "Latitude");
         lng = col(row, "GPS LONGITUDE", "Gps longitude", "Gps Longitude", "GPS_LONGITUDE", "Longitude");
@@ -99,20 +117,26 @@ export async function POST(request: NextRequest) {
         channelMap.set(channelName, ch);
       }
 
-      // Auto-create rep
-      if (repCode && !repMap.has(repCode)) {
-        const r: Rep = {
-          id: crypto.randomUUID(),
-          code: repCode,
-          name: repName,
-          email: "",
-          cell: "",
-          homeAddress: "",
-          homeGpsLat: "",
-          homeGpsLng: "",
-          teamId: "",
-        };
-        repMap.set(repCode, r);
+      // Auto-create reps — primary plus any secondary/third on the row
+      for (const [code, name] of [
+        [repCode, repName],
+        [repCode2, repName2],
+        [repCode3, repName3],
+      ] as const) {
+        if (code && !repMap.has(code)) {
+          const r: Rep = {
+            id: crypto.randomUUID(),
+            code,
+            name,
+            email: "",
+            cell: "",
+            homeAddress: "",
+            homeGpsLat: "",
+            homeGpsLng: "",
+            teamId: "",
+          };
+          repMap.set(code, r);
+        }
       }
 
       const channelId = channelMap.get(channelName)?.id || "";
@@ -123,6 +147,11 @@ export async function POST(request: NextRequest) {
         existing.name = storeName;
         existing.channelId = channelId;
         existing.repCode = repCode;
+        // Only overwrite the extra reps when the file actually carries those
+        // columns — an upload from a single-rep sheet must not silently clear
+        // secondaries set elsewhere.
+        if (hasRep2Column) existing.repCode2 = repCode2 || undefined;
+        if (hasRep3Column) existing.repCode3 = repCode3 || undefined;
         existing.gpsLat = lat;
         existing.gpsLng = lng;
         existing.monthlySales = sales;
@@ -136,6 +165,8 @@ export async function POST(request: NextRequest) {
           name: storeName,
           channelId,
           repCode,
+          ...(repCode2 ? { repCode2 } : {}),
+          ...(repCode3 ? { repCode3 } : {}),
           gpsLat: lat,
           gpsLng: lng,
           monthlySales: sales,
