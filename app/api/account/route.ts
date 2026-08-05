@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { requireSession, encodeSession } from "@/lib/auth";
+import { requireSession, encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { resolveManager } from "@/lib/manager";
 import { SessionPayload } from "@/lib/types";
@@ -76,15 +76,9 @@ export async function PUT(request: NextRequest) {
       if (team) updatedSession.teamId = team.id;
     }
 
-    const token = encodeSession(updatedSession);
+    const token = await encodeSession(updatedSession);
     const response = NextResponse.json({ ok: true, user: updatedSession });
-    response.cookies.set("iram_session", token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-    });
+    response.cookies.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
     return response;
   } catch (err) {
     const msg = String(err);

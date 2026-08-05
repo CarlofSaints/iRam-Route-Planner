@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import crypto from "crypto";
 import { verifySSOToken } from "@/lib/sso";
-import { encodeSession } from "@/lib/auth";
+import { encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload, User } from "@/lib/types";
@@ -106,12 +106,6 @@ export async function GET(request: NextRequest) {
   });
 
   const response = NextResponse.redirect(new URL("/", request.url));
-  response.cookies.set("iram_session", encodeSession(session), {
-    httpOnly: false,
-    secure: process.env.NODE_ENV === "production",
-    sameSite: "lax",
-    path: "/",
-    maxAge: 60 * 60 * 24 * 30, // 30 days, matches /api/auth
-  });
+  response.cookies.set(SESSION_COOKIE, await encodeSession(session), SESSION_COOKIE_OPTIONS);
   return response;
 }

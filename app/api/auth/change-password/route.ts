@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
-import { encodeSession } from "@/lib/auth";
+import { encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload } from "@/lib/types";
 import bcrypt from "bcryptjs";
@@ -44,15 +44,9 @@ export async function POST(request: NextRequest) {
       if (team) session.teamId = team.id;
     }
 
-    const token = encodeSession(session);
+    const token = await encodeSession(session);
     const response = NextResponse.json({ ok: true });
-    response.cookies.set("iram_session", token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30,
-    });
+    response.cookies.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
     return response;
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });

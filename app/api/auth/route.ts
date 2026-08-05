@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateCredentials, encodeSession, getSession } from "@/lib/auth";
+import { validateCredentials, encodeSession, getSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { getReps, getTeams, getUsers, getRolePermissions } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
 
@@ -45,15 +45,9 @@ export async function POST(request: NextRequest) {
 
     logActivity({ action: "User logged in", actor: session.email, actorName: session.name, summary: `${session.name} logged in` });
 
-    const token = encodeSession(session);
+    const token = await encodeSession(session);
     const response = NextResponse.json({ ok: true, user: session });
-    response.cookies.set("iram_session", token, {
-      httpOnly: false,
-      secure: process.env.NODE_ENV === "production",
-      sameSite: "lax",
-      path: "/",
-      maxAge: 60 * 60 * 24 * 30, // 30 days
-    });
+    response.cookies.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
     return response;
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
@@ -62,9 +56,8 @@ export async function POST(request: NextRequest) {
 
 export async function DELETE() {
   const response = NextResponse.json({ ok: true });
-  response.cookies.set("iram_session", "", {
-    httpOnly: false,
-    path: "/",
+  response.cookies.set(SESSION_COOKIE, "", {
+    ...SESSION_COOKIE_OPTIONS,
     maxAge: 0,
   });
   return response;

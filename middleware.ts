@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { verifyToken, sessionSecret } from "@/lib/sessionToken";
 
 // /api/cron is listed here so Vercel's scheduler can reach it without a session
 // cookie — the route itself authenticates via CRON_SECRET or an admin session.
@@ -17,7 +18,7 @@ const PUBLIC_PATHS = ["/login", "/api/auth", "/api/cron", "/sso/callback"];
 // second gate rather than the only one.
 const BEARER_PATHS = ["/api/seed"];
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // Allow public paths and static assets
@@ -39,7 +40,12 @@ export function middleware(request: NextRequest) {
     return NextResponse.next();
   }
 
-  const session = request.cookies.get("iram_session")?.value;
+  // Verify the SIGNATURE, not just that a cookie is present. Plenty of read
+  // routes (GET /api/teams, /api/reps, /api/stores…) never call getSession(),
+  // so this is the only thing standing in front of them — a presence check
+  // would let a hand-written cookie read the whole database.
+  const token = request.cookies.get("iram_session")?.value;
+  const session = token ? await verifyToken(token, sessionSecret()) : null;
   if (!session) {
     // API callers get a 401 they can actually read; page loads get the login
     // screen. Redirecting an API POST to /login returns HTML with a 200 and
