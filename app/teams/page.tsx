@@ -16,6 +16,7 @@ export default function TeamsPage() {
   const [draggingRepId, setDraggingRepId] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
   const [assigning, setAssigning] = useState<string | null>(null);
+  const [repSearch, setRepSearch] = useState("");
 
   // Counter-based drag enter/leave tracking per drop zone (handles child elements)
   const dragCounters = useRef<Map<string, number>>(new Map());
@@ -45,6 +46,22 @@ export default function TeamsPage() {
   }, [reps]);
 
   const unassignedReps = useMemo(() => reps.filter((r) => !r.teamId), [reps]);
+
+  /**
+   * Search the unassigned list. With 147 reps the pile is far too long to find
+   * anyone in by eye. Matches name or rep code, and ignores case and spacing so
+   * a pasted code still hits.
+   */
+  const visibleUnassigned = useMemo(() => {
+    const q = repSearch.trim().toLowerCase();
+    if (!q) return unassignedReps;
+    return unassignedReps.filter(
+      (r) =>
+        (r.name || "").toLowerCase().includes(q) ||
+        (r.code || "").toLowerCase().includes(q) ||
+        (r.email || "").toLowerCase().includes(q)
+    );
+  }, [unassignedReps, repSearch]);
 
   const addTeam = async () => {
     setSaving(true);
@@ -431,12 +448,49 @@ export default function TeamsPage() {
               : "border-dashed border-gray-200 bg-gray-50"
         }`}
       >
-        <h3 className={`font-semibold mb-3 ${unassignedReps.length > 0 ? "text-amber-800" : "text-gray-400"}`}>
-          Unassigned Reps ({unassignedReps.length})
-        </h3>
+        <div className="flex flex-col sm:flex-row sm:items-center gap-3 mb-3">
+          <h3 className={`font-semibold ${unassignedReps.length > 0 ? "text-amber-800" : "text-gray-400"}`}>
+            Unassigned Reps ({unassignedReps.length})
+            {repSearch && (
+              <span className="font-normal text-amber-700">
+                {" "}— showing {visibleUnassigned.length}
+              </span>
+            )}
+          </h3>
+
+          {unassignedReps.length > 0 && (
+            <div className="relative sm:ml-auto w-full sm:w-72">
+              <svg className="w-4 h-4 text-amber-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-4.35-4.35M11 19a8 8 0 100-16 8 8 0 000 16z" />
+              </svg>
+              <input
+                value={repSearch}
+                onChange={(e) => setRepSearch(e.target.value)}
+                placeholder="Search name or code..."
+                className="w-full border border-amber-200 bg-white rounded-lg pl-9 pr-8 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+              />
+              {repSearch && (
+                <button
+                  onClick={() => setRepSearch("")}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-amber-400 hover:text-amber-700 text-lg leading-none"
+                  aria-label="Clear search"
+                >
+                  ×
+                </button>
+              )}
+            </div>
+          )}
+        </div>
 
         {unassignedReps.length === 0 && !draggingRepId && (
           <p className="text-xs text-gray-400 italic">All reps are assigned to teams</p>
+        )}
+
+        {unassignedReps.length > 0 && visibleUnassigned.length === 0 && (
+          <p className="text-xs text-amber-700 italic">
+            No unassigned rep matches &ldquo;{repSearch}&rdquo;. They may already be in a team —
+            clear the search to see all {unassignedReps.length}.
+          </p>
         )}
 
         {unassignedReps.length === 0 && draggingRepId && (
@@ -449,9 +503,9 @@ export default function TeamsPage() {
           </div>
         )}
 
-        {unassignedReps.length > 0 && (
+        {visibleUnassigned.length > 0 && (
           <div className="flex flex-wrap gap-2">
-            {unassignedReps.map((rep) => (
+            {visibleUnassigned.map((rep) => (
               <div
                 key={rep.id}
                 {...draggableProps(rep.id)}
