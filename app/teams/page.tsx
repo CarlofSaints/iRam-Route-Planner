@@ -15,6 +15,7 @@ export default function TeamsPage() {
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null);
   const [draggingRepId, setDraggingRepId] = useState<string | null>(null);
   const [dropping, setDropping] = useState(false);
+  const [assigning, setAssigning] = useState<string | null>(null);
 
   // Counter-based drag enter/leave tracking per drop zone (handles child elements)
   const dragCounters = useRef<Map<string, number>>(new Map());
@@ -97,6 +98,47 @@ export default function TeamsPage() {
     });
     load();
   };
+
+  /**
+   * Assign from a dropdown as well as by dragging. Dragging is fine for a
+   * handful of people but unusable at 147, which is what this list holds —
+   * and it needs the source and target on screen at the same time.
+   */
+  const setTeamForRep = async (rep: Rep, teamId: string) => {
+    if ((rep.teamId || "") === teamId) return;
+    setAssigning(rep.id);
+    // Optimistic — the dropdown should feel instant
+    setReps((prev) => prev.map((r) => (r.id === rep.id ? { ...r, teamId } : r)));
+    try {
+      const res = await fetch("/api/reps", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: rep.id, teamId }),
+      });
+      if (!res.ok) load(); // revert to server truth
+    } catch {
+      load();
+    } finally {
+      setAssigning(null);
+    }
+  };
+
+  const TeamPicker = ({ rep }: { rep: Rep }) => (
+    <select
+      value={rep.teamId || ""}
+      disabled={assigning === rep.id}
+      onChange={(e) => setTeamForRep(rep, e.target.value)}
+      onClick={(e) => e.stopPropagation()}
+      className={`text-xs border rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-iram-green disabled:opacity-50 ${
+        rep.teamId ? "border-gray-200 text-gray-600" : "border-amber-300 bg-white text-amber-700"
+      }`}
+    >
+      <option value="">Unassigned</option>
+      {teams.map((t) => (
+        <option key={t.id} value={t.id}>{t.name}</option>
+      ))}
+    </select>
+  );
 
   // ── Drag & Drop ──
   // Uses counter-based enter/leave to handle child elements reliably.
@@ -220,9 +262,13 @@ export default function TeamsPage() {
         </button>
       </div>
 
-      {/* Drag hint */}
+      {/* Assignment hint */}
       {unassignedReps.length > 0 && (
-        <p className="text-xs text-gray-400">Drag reps into a team card to assign them.</p>
+        <p className="text-xs text-gray-400">
+          Pick a team from the dropdown on any rep, or drag them into a team card.
+          The dropdown is easier once the list is long — the Reps page has the same
+          picker in a sortable table.
+        </p>
       )}
 
       {/* Add Team Form */}
@@ -348,12 +394,15 @@ export default function TeamsPage() {
                           <span className="text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{rep.code}</span>
                           <span className="text-sm text-gray-900">{rep.name}</span>
                         </div>
-                        <button
-                          onClick={() => removeRepFromTeam(rep.id)}
-                          className="text-xs text-gray-400 hover:text-red-600"
-                        >
-                          Remove
-                        </button>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <TeamPicker rep={rep} />
+                          <button
+                            onClick={() => removeRepFromTeam(rep.id)}
+                            className="text-xs text-gray-400 hover:text-red-600"
+                          >
+                            Remove
+                          </button>
+                        </div>
                       </div>
                     ))}
 
@@ -415,6 +464,7 @@ export default function TeamsPage() {
                 </svg>
                 <span className="text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 pointer-events-none">{rep.code}</span>
                 <span className="text-sm text-gray-900 pointer-events-none">{rep.name}</span>
+                <TeamPicker rep={rep} />
               </div>
             ))}
           </div>

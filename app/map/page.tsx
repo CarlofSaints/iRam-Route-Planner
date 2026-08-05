@@ -134,9 +134,14 @@ function MapPageInner() {
     });
   }, [showRoute, routes, filterRep, filterWeek, filterDay]);
 
-  // Flatten all matching stops
+  // Flatten all matching stops, tagging each with the day plan it came from.
+  // Sequence numbers restart at 1 in every day, so without this a Monday view
+  // across four weeks renders four different markers all labelled "1" with no
+  // way to tell them apart.
   const allRouteStops = useMemo(() => {
-    return matchingDayPlans.flatMap((d) => d.stops);
+    return matchingDayPlans.flatMap((d, dayIndex) =>
+      d.stops.map((s) => ({ ...s, dayIndex, week: d.week, day: d.day }))
+    );
   }, [matchingDayPlans]);
 
   // Build per-day polyline positions. Prefer Google's road-following geometry

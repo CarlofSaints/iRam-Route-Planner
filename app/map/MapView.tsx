@@ -6,16 +6,29 @@ import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Store, Rep, Channel, RouteStop } from "@/lib/types";
 
+/**
+ * A route stop plus which day plan it came from. Sequence numbers restart at 1
+ * inside every day, so as soon as more than one day is on the map the number
+ * alone is ambiguous — several markers legitimately read "1". Carrying the day
+ * through lets each day get its own colour and lets the popup say which day a
+ * stop belongs to.
+ */
+export interface MapRouteStop extends RouteStop {
+  dayIndex: number;
+  week: string;
+  day: string;
+}
+
 interface Props {
   stores: Store[];
   repMap: Map<string, Rep>;
   channelMap: Map<string, Channel>;
   repColors: Record<string, string>;
-  routeStops?: RouteStop[];
+  routeStops?: MapRouteStop[];
   routeLines?: [number, number][][]; // per-day polyline positions
   repHome?: { lat: number; lng: number } | null;
   showRoute?: boolean;
-  singleDay?: boolean; // true when viewing exactly one day (show sequence numbers)
+  singleDay?: boolean; // true when exactly one day plan is on the map
 }
 
 /** Decode Google's encoded polyline format */
@@ -51,12 +64,12 @@ function decodePolyline(encoded: string): [number, number][] {
   return points;
 }
 
-/** Create a numbered circle marker icon */
-function numberedIcon(num: number): L.DivIcon {
+/** Create a numbered circle marker icon, coloured to match its day's line */
+function numberedIcon(num: number, background: string = "#DC2626"): L.DivIcon {
   return L.divIcon({
     className: "",
     html: `<div style="
-      background: #DC2626;
+      background: ${background};
       color: white;
       width: 24px;
       height: 24px;
@@ -186,17 +199,29 @@ export default function MapView({
           ) : null
         )}
 
-        {/* Route stop markers */}
+        {/* Route stop markers.
+            Numbers restart at 1 within each day, so when several days are
+            shown the map legitimately contains more than one "1". Each day's
+            markers take that day's line colour, and the popup names the day,
+            so repeated numbers can be told apart. */}
         {showRoute &&
           routeStops?.map((stop) => (
             <Marker
-              key={`route-${stop.storeId}-${stop.sequence}`}
+              key={`route-${stop.week}-${stop.day}-${stop.storeId}-${stop.sequence}`}
               position={[stop.lat, stop.lng]}
-              icon={singleDay ? numberedIcon(stop.sequence) : numberedIcon(stop.sequence)}
+              icon={numberedIcon(
+                stop.sequence,
+                singleDay ? "#DC2626" : lineColors[stop.dayIndex % lineColors.length]
+              )}
             >
               <Popup>
                 <div className="text-xs space-y-1">
                   <p className="font-bold text-sm">#{stop.sequence} {stop.storeName}</p>
+                  {!singleDay && (
+                    <p className="font-medium" style={{ color: lineColors[stop.dayIndex % lineColors.length] }}>
+                      {stop.week} · {stop.day}
+                    </p>
+                  )}
                   <p><span className="text-gray-500">Arrive:</span> {stop.arrivalTime}</p>
                   <p><span className="text-gray-500">Depart:</span> {stop.departureTime}</p>
                   <p><span className="text-gray-500">Visit:</span> {stop.visitDuration} min</p>

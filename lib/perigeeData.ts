@@ -1,4 +1,4 @@
-import { put, list, del } from "@vercel/blob";
+import { put, get } from "@vercel/blob";
 import {
   PerigeeVisit,
   PerigeeSyncConfig,
@@ -18,18 +18,17 @@ const MAX_CRON_LOG_ENTRIES = 100;
 
 // ---------- low-level helpers (mirrors data.ts pattern) ----------
 
+// Read by key, never via list() — see the long note on readJSON in lib/data.ts.
+// This module holds the Perigee config, poll schedule and the visit history the
+// cron appends to, so a read that quietly returned empty here would have the
+// cron write a truncated visit list back over the real one.
 async function readJSON<T>(key: string, fallback: T): Promise<T> {
   if (useBlob) {
-    try {
-      const { blobs } = await list({ prefix: `${key}.json` });
-      if (blobs.length === 0) return fallback;
-      const res = await fetch(blobs[0].url, {
-        headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-      });
-      return (await res.json()) as T;
-    } catch {
-      return fallback;
-    }
+    const result = await get(`${key}.json`, { access: "private", useCache: false });
+    if (!result) return fallback;
+    const text = await new Response(result.stream).text();
+    if (!text.trim()) return fallback;
+    return JSON.parse(text) as T;
   }
   const filePath = path.join(DATA_DIR, `${key}.json`);
   try {
@@ -43,16 +42,11 @@ async function readJSON<T>(key: string, fallback: T): Promise<T> {
 async function writeJSON<T>(key: string, data: T): Promise<void> {
   const body = JSON.stringify(data, null, 2);
   if (useBlob) {
-    try {
-      const { blobs } = await list({ prefix: `${key}.json` });
-      for (const b of blobs) await del(b.url);
-    } catch {
-      /* ignore */
-    }
     await put(`${key}.json`, body, {
       access: "private",
       contentType: "application/json",
       addRandomSuffix: false,
+      allowOverwrite: true,
     });
     return;
   }
