@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStores, saveStores, getChannels, saveChannels, getReps, saveReps } from "@/lib/data";
+import { getStores, saveStores, getChannels, saveChannels, getReps, saveReps, getStoreOverrides } from "@/lib/data";
+import { overriddenStoreIds } from "@/lib/channelDefaults";
 import { Store, Channel, Rep } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
@@ -22,6 +23,7 @@ export async function POST(request: NextRequest) {
     const existingStores = await getStores();
     const channelMap = new Map(existingChannels.map((c) => [c.name, c]));
     const repMap = new Map(existingReps.map((r) => [r.code, r]));
+    const pinnedStoreIds = overriddenStoreIds(await getStoreOverrides());
 
     // Index existing stores by placeId for merge
     const storeMap = new Map(existingStores.map((s) => [s.placeId, s]));
@@ -139,13 +141,21 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const channelId = channelMap.get(channelName)?.id || "";
+      const channel = channelMap.get(channelName);
+      const channelId = channel?.id || "";
 
       if (storeMap.has(placeId)) {
         // Update existing store
         const existing = storeMap.get(placeId)!;
         existing.name = storeName;
+        // A store that moves to a different channel takes that channel's
+        // defaults with it, unless a manager has pinned it with an override.
+        const movedChannel = existing.channelId !== channelId;
         existing.channelId = channelId;
+        if (movedChannel && channel && !pinnedStoreIds.has(existing.id)) {
+          existing.frequency = channel.frequency;
+          existing.duration = channel.duration;
+        }
         existing.repCode = repCode;
         // Only overwrite the extra reps when the file actually carries those
         // columns — an upload from a single-rep sheet must not silently clear
@@ -170,8 +180,11 @@ export async function POST(request: NextRequest) {
           gpsLat: lat,
           gpsLng: lng,
           monthlySales: sales,
-          frequency: "monthly",
-          duration: 30,
+          // Inherit the channel's defaults. These used to be hardcoded to
+          // monthly/30, so every uploaded store ignored its channel's settings
+          // from the moment it was created.
+          frequency: channel?.frequency ?? "monthly",
+          duration: channel?.duration ?? 30,
           dayOfWeek: "",
           weekNumber: "",
           ...(region ? { region } : {}),

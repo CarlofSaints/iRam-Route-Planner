@@ -1,11 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChannels, saveChannels } from "@/lib/data";
-import { Channel, FrequencyType, FREQUENCY_OPTIONS } from "@/lib/types";
+import { getChannels, saveChannels, getStores, saveStores, getStoreOverrides } from "@/lib/data";
+import { applyChannelDefaults, overriddenStoreIds } from "@/lib/channelDefaults";
+import { Channel, FrequencyType, FREQUENCY_OPTIONS, parseFrequency } from "@/lib/types";
 import { requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
-
-const VALID_FREQUENCIES = new Set(FREQUENCY_OPTIONS.map((f) => f.value));
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,6 +41,8 @@ export async function POST(request: NextRequest) {
     let updated = 0;
     let created = 0;
     const errors: string[] = [];
+    // Channels whose defaults this import touched — only these cascade.
+    const touchedChannelIds = new Set<string>();
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -51,23 +52,19 @@ export async function POST(request: NextRequest) {
       const freqRaw = col(row, "Frequency", "Default Frequency");
       const durationRaw = col(row, "Duration (min)", "Duration", "Duration (minutes)");
 
-      // Validate frequency
+      // Validate frequency. parseFrequency is deliberately forgiving about
+      // case, spacing and wording — these files are typed by hand, and a whole
+      // import used to fail on "Weekly" vs "weekly".
       let frequency: FrequencyType | undefined;
       if (freqRaw) {
-        if (VALID_FREQUENCIES.has(freqRaw as FrequencyType)) {
-          frequency = freqRaw as FrequencyType;
-        } else {
-          // Try matching by label
-          const byLabel = FREQUENCY_OPTIONS.find(
-            (f) => f.label.toLowerCase() === freqRaw.toLowerCase()
+        const parsed = parseFrequency(freqRaw);
+        if (!parsed) {
+          errors.push(
+            `Row ${i + 2}: unrecognised frequency "${freqRaw}" — use one of: ${FREQUENCY_OPTIONS.map((f) => f.label).join(", ")}`
           );
-          if (byLabel) {
-            frequency = byLabel.value;
-          } else {
-            errors.push(`Row ${i + 2}: invalid frequency "${freqRaw}"`);
-            continue;
-          }
+          continue;
         }
+        frequency = parsed;
       }
 
       const duration = durationRaw ? Number(durationRaw) : undefined;
@@ -88,7 +85,10 @@ export async function POST(request: NextRequest) {
           existing.duration = duration;
           changed = true;
         }
-        if (changed) updated++;
+        if (changed) {
+          updated++;
+          touchedChannelIds.add(existing.id);
+        }
       } else {
         // Create new channel
         const newCh: Channel = {
@@ -99,17 +99,35 @@ export async function POST(request: NextRequest) {
         };
         channels.push(newCh);
         byName.set(name.toLowerCase().trim(), newCh);
+        touchedChannelIds.add(newCh.id);
         created++;
       }
     }
 
+    let storesUpdated = 0;
+    let storesPinned = 0;
     if (updated > 0 || created > 0) {
       await saveChannels(channels);
+
+      // An import that changes defaults has to reach the stores too, exactly
+      // as a single channel edit does.
+      if (touchedChannelIds.size > 0) {
+        const [stores, overrides] = await Promise.all([getStores(), getStoreOverrides()]);
+        const result = applyChannelDefaults(stores, channels, overriddenStoreIds(overrides), {
+          apply: true,
+          onlyChannelIds: touchedChannelIds,
+        });
+        storesUpdated = result.changes.length;
+        storesPinned = result.skippedOverridden;
+        if (storesUpdated > 0) await saveStores(stores);
+      }
+
       logActivity({
         action: "Imported channels",
         actor: session?.email || "unknown",
         actorName: session?.name || "Unknown",
         summary: `Imported channels: ${updated} updated, ${created} created`,
+        details: `Applied defaults to ${storesUpdated} store(s); ${storesPinned} kept their override`,
       });
     }
 
@@ -117,6 +135,8 @@ export async function POST(request: NextRequest) {
       ok: true,
       updated,
       created,
+      storesUpdated,
+      storesPinned,
       errors,
       totalRows: rows.length,
     });

@@ -1,4 +1,4 @@
-import { put, list, del } from "@vercel/blob";
+import { put, list, get } from "@vercel/blob";
 import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
 import fs from "fs";
 import path from "path";
@@ -8,19 +8,31 @@ const useBlob = !!process.env.BLOB_READ_WRITE_TOKEN;
 
 // ---------- low-level helpers ----------
 
+/**
+ * Read a JSON blob by key.
+ *
+ * Reads go through get(), NOT list() + fetch(blob.url). The listing index is
+ * eventually consistent: for a few seconds after a write, list() can still
+ * return the previous (already deleted) URL, and fetching it 404s. The old
+ * implementation swallowed that 404 and returned the empty fallback, so a read
+ * taken straight after a write reported "no data" — which is why a newly
+ * created team vanished until the index caught up. Worse, a caller doing
+ * read-modify-write in that window would then persist the empty array over
+ * live data.
+ *
+ * get() addresses the blob by key, so there is no index to go stale, and it
+ * returns null (rather than throwing) when the blob genuinely does not exist.
+ */
 async function readJSON<T>(key: string, fallback: T): Promise<T> {
   if (useBlob) {
-    try {
-      const { blobs } = await list({ prefix: `${key}.json` });
-      if (blobs.length === 0) return fallback;
-      // Private store: fetch with Bearer token
-      const res = await fetch(blobs[0].url, {
-        headers: { Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}` },
-      });
-      return (await res.json()) as T;
-    } catch {
-      return fallback;
-    }
+    const result = await get(`${key}.json`, { access: "private", useCache: false });
+    // null means the blob does not exist yet — a real, expected empty state.
+    if (!result) return fallback;
+    const text = await new Response(result.stream).text();
+    if (!text.trim()) return fallback;
+    return JSON.parse(text) as T;
+    // Any other failure throws on purpose. Returning the fallback here is what
+    // turned a transient read error into silent data loss.
   }
   // local file fallback
   const filePath = path.join(DATA_DIR, `${key}.json`);
@@ -32,18 +44,21 @@ async function readJSON<T>(key: string, fallback: T): Promise<T> {
   }
 }
 
+/**
+ * Write a JSON blob by key.
+ *
+ * Overwrites in place with allowOverwrite. The previous implementation deleted
+ * the blob and then re-put it, which opened a window where the object did not
+ * exist at all — see readJSON above for what that cost us.
+ */
 async function writeJSON<T>(key: string, data: T): Promise<void> {
   const body = JSON.stringify(data, null, 2);
   if (useBlob) {
-    // delete old blob first
-    try {
-      const { blobs } = await list({ prefix: `${key}.json` });
-      for (const b of blobs) await del(b.url);
-    } catch { /* ignore */ }
     await put(`${key}.json`, body, {
       access: "private",
       contentType: "application/json",
       addRandomSuffix: false,
+      allowOverwrite: true,
     });
     return;
   }

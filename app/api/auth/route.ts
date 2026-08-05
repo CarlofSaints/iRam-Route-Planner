@@ -1,7 +1,24 @@
 import { NextRequest, NextResponse } from "next/server";
-import { validateCredentials, encodeSession } from "@/lib/auth";
-import { getReps, getTeams, getUsers } from "@/lib/data";
+import { validateCredentials, encodeSession, getSession } from "@/lib/auth";
+import { getReps, getTeams, getUsers, getRolePermissions } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
+
+export const dynamic = "force-dynamic";
+
+/**
+ * The current session as the SERVER sees it, with the live role and the
+ * permission list for that role. The client used to decode the cookie itself,
+ * so a promoted user kept their old role in the UI until the cookie expired.
+ */
+export async function GET() {
+  const session = await getSession();
+  if (!session) {
+    return NextResponse.json({ session: null, permissions: [] }, { headers: { "Cache-Control": "no-store" } });
+  }
+  const perms = await getRolePermissions();
+  const permissions = perms.find((p) => p.role === session.role)?.permissions ?? [];
+  return NextResponse.json({ session, permissions }, { headers: { "Cache-Control": "no-store" } });
+}
 
 export async function POST(request: NextRequest) {
   try {

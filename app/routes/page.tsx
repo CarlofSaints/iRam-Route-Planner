@@ -27,7 +27,7 @@ const WEEKS: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
 const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 
 export default function RoutesPage() {
-  const { session } = useSession();
+  const { session, can } = useSession();
   const [routes, setRoutes] = useState<RoutePlanDocument | null>(null);
   const [reps, setReps] = useState<Rep[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
@@ -54,6 +54,10 @@ export default function RoutesPage() {
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
   const isTeamManager = session?.role === "teamManager";
   const isRep = session?.role === "rep";
+  // Driven by the permission grid, not a hardcoded role list, so it can be
+  // granted without making someone an admin.
+  const canGenerate = can("generate_routes");
+  const canManageRoutes = can("manage_routes");
 
   const load = () => {
     Promise.all([
@@ -324,7 +328,7 @@ export default function RoutesPage() {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {isAdmin && routes && (
+          {canManageRoutes && routes && (
             <button
               onClick={clearRoutes}
               className="text-gray-400 hover:text-red-600 text-sm"
@@ -332,7 +336,7 @@ export default function RoutesPage() {
               Clear All
             </button>
           )}
-          {isAdmin && (
+          {canGenerate && (
             <button
               onClick={generateRoutes}
               disabled={generating}

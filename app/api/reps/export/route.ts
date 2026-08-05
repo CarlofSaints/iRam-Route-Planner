@@ -1,18 +1,30 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps } from "@/lib/data";
-import { requireSession } from "@/lib/auth";
+import { getReps, getTeams, getVisitRoles } from "@/lib/data";
+import { requirePermission } from "@/lib/auth";
 import XLSX from "xlsx";
 
 export async function GET(request: NextRequest) {
   try {
-    await requireSession();
+    // Restricted: the rep list carries names, emails, cell numbers and home
+    // addresses, so it is not something every signed-in user should be able
+    // to pull down.
+    await requirePermission("export_data");
 
     const format = request.nextUrl.searchParams.get("format") === "csv" ? "csv" : "xlsx";
 
-    const reps = await getReps();
+    const [reps, teams, visitRoles] = await Promise.all([
+      getReps(),
+      getTeams(),
+      getVisitRoles(),
+    ]);
+    const teamName = new Map(teams.map((t) => [t.id, t.name]));
+    const roleName = new Map(visitRoles.map((r) => [r.id, r.name]));
 
+    // Team and Visit Role are included so this file round-trips through the
+    // importer — editing a column in Excel is how you reassign 147 reps
+    // without dragging each one.
     const rows: (string | number)[][] = [
-      ["Rep Code", "Rep Name", "Email", "Cell Number", "Home Address", "Hours/Day"],
+      ["Rep Code", "Rep Name", "Email", "Cell Number", "Home Address", "Hours/Day", "Team", "Visit Role"],
     ];
 
     const sorted = [...reps].sort((a, b) => a.name.localeCompare(b.name));
@@ -25,6 +37,8 @@ export async function GET(request: NextRequest) {
         rep.cell || "",
         rep.homeAddress || "",
         rep.workingHoursPerDay ?? 8.5,
+        teamName.get(rep.teamId) || "",
+        rep.visitRoleId ? roleName.get(rep.visitRoleId) || "" : "",
       ]);
     }
 
@@ -36,6 +50,8 @@ export async function GET(request: NextRequest) {
       { wch: 16 }, // Cell Number
       { wch: 40 }, // Home Address
       { wch: 10 }, // Hours/Day
+      { wch: 22 }, // Team
+      { wch: 16 }, // Visit Role
     ];
 
     const date = new Date().toISOString().slice(0, 10);
@@ -66,6 +82,9 @@ export async function GET(request: NextRequest) {
   } catch (err) {
     if (String(err).includes("Unauthorized")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    if (String(err).includes("Forbidden")) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
     console.error("Reps export error:", err);
     return NextResponse.json({ error: String(err) }, { status: 500 });

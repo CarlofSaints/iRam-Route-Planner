@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getChannels, saveChannels } from "@/lib/data";
+import { getChannels, saveChannels, getStores, saveStores, getStoreOverrides } from "@/lib/data";
 import { Channel, FrequencyType } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { applyChannelDefaults, overriddenStoreIds } from "@/lib/channelDefaults";
 
 export async function GET() {
   try {
@@ -22,16 +23,44 @@ export async function PUT(request: NextRequest) {
     const idx = channels.findIndex((c) => c.id === id);
     if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
+    const defaultsChanged =
+      (frequency !== undefined && frequency !== channels[idx].frequency) ||
+      (duration !== undefined && duration !== channels[idx].duration);
+
     if (name) channels[idx].name = name;
     if (frequency) channels[idx].frequency = frequency as FrequencyType;
     if (duration !== undefined) channels[idx].duration = duration;
 
     await saveChannels(channels);
 
-    const session = await getSession();
-    logActivity({ action: "Updated channel", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Updated channel ${channels[idx].name}` });
+    // Push the new defaults down onto this channel's stores. Without this the
+    // channel record is the only thing that changes and nothing downstream
+    // ever sees it — see lib/channelDefaults.ts.
+    let storesUpdated = 0;
+    let storesPinned = 0;
+    if (defaultsChanged) {
+      const [stores, overrides] = await Promise.all([getStores(), getStoreOverrides()]);
+      const result = applyChannelDefaults(stores, channels, overriddenStoreIds(overrides), {
+        apply: true,
+        onlyChannelIds: new Set([channels[idx].id]),
+      });
+      storesUpdated = result.changes.length;
+      storesPinned = result.skippedOverridden;
+      if (storesUpdated > 0) await saveStores(stores);
+    }
 
-    return NextResponse.json(channels[idx]);
+    const session = await getSession();
+    logActivity({
+      action: "Updated channel",
+      actor: session?.email || "unknown",
+      actorName: session?.name || "Unknown",
+      summary: `Updated channel ${channels[idx].name}`,
+      details: defaultsChanged
+        ? `Applied defaults to ${storesUpdated} store(s); ${storesPinned} kept their override`
+        : undefined,
+    });
+
+    return NextResponse.json({ ...channels[idx], storesUpdated, storesPinned });
   } catch (err) {
     return NextResponse.json({ error: String(err) }, { status: 500 });
   }

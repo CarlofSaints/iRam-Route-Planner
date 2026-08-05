@@ -19,6 +19,14 @@ export default function ChannelsPage() {
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyPreview, setApplyPreview] = useState<{
+    totalStores: number;
+    wouldChange: number;
+    keptOverridden: number;
+    manualEditsProtected: number;
+    byChannel: { name: string; count: number; to: string }[];
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
@@ -44,15 +52,68 @@ export default function ChannelsPage() {
 
   const saveEdit = async (id: string) => {
     setSaving(true);
-    await fetch("/api/channels", {
+    const res = await fetch("/api/channels", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id, ...editData }),
     });
+    const data = await res.json().catch(() => ({}));
     setEditing(null);
     setEditData({});
     setSaving(false);
+    // Say what happened to the STORES. A channel edit that reports nothing is
+    // how "BUCO is set to 120 minutes but every store still says 30" went
+    // unnoticed for so long.
+    if (res.ok && typeof data.storesUpdated === "number") {
+      setImportMsg(
+        data.storesUpdated > 0
+          ? {
+              type: "success",
+              text: `Updated ${data.storesUpdated} store${data.storesUpdated === 1 ? "" : "s"} in this channel${data.storesPinned ? `; ${data.storesPinned} kept their own override` : ""}.`,
+            }
+          : { type: "success", text: "Channel saved. No stores needed changing." }
+      );
+    }
     load();
+  };
+
+  const previewDefaults = async () => {
+    setApplyBusy(true);
+    setApplyPreview(null);
+    try {
+      const res = await fetch("/api/channels/apply-defaults", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok) {
+        setImportMsg({ type: "error", text: data.error || "Could not read defaults" });
+        return;
+      }
+      setApplyPreview(data);
+    } finally {
+      setApplyBusy(false);
+    }
+  };
+
+  const applyDefaults = async () => {
+    setApplyBusy(true);
+    try {
+      const res = await fetch("/api/channels/apply-defaults", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ protectManualEdits: true }),
+      });
+      const data = await res.json();
+      setImportMsg(
+        res.ok
+          ? {
+              type: "success",
+              text: `Applied channel defaults to ${data.storesUpdated} store(s). ${data.keptOverridden} kept an existing override; ${data.overridesCreated} manual edit(s) preserved.`,
+            }
+          : { type: "error", text: data.error || "Failed to apply defaults" }
+      );
+      setApplyPreview(null);
+    } finally {
+      setApplyBusy(false);
+    }
   };
 
   const addChannel = async () => {
@@ -202,6 +263,14 @@ export default function ChannelsPage() {
             />
           </label>
           <button
+            onClick={previewDefaults}
+            disabled={applyBusy}
+            className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            title="Push every channel's frequency and duration onto its stores"
+          >
+            {applyBusy ? "Checking..." : "Apply defaults to stores"}
+          </button>
+          <button
             onClick={() => setShowAdd(!showAdd)}
             className="flex items-center gap-2 px-4 py-2 bg-iram-green text-white text-sm font-medium rounded-lg hover:bg-iram-green-dark transition-colors"
           >
@@ -224,6 +293,76 @@ export default function ChannelsPage() {
         >
           <span>{importMsg.text}</span>
           <button onClick={() => setImportMsg(null)} className="text-xs opacity-60 hover:opacity-100 ml-4">dismiss</button>
+        </div>
+      )}
+
+      {/* Apply-defaults preview — always shown before anything is written */}
+      {applyPreview && (
+        <div className="bg-white border border-gray-200 rounded-xl p-5 mb-6">
+          <h3 className="text-sm font-semibold text-gray-800 mb-1">
+            Apply channel defaults to stores
+          </h3>
+          <p className="text-xs text-gray-500 mb-4">
+            A channel&apos;s frequency and duration are defaults that live on each store. Stores
+            that drifted from their channel are listed below.
+          </p>
+
+          {applyPreview.wouldChange === 0 ? (
+            <p className="text-sm text-gray-600">
+              Every store already matches its channel. Nothing to do.
+            </p>
+          ) : (
+            <>
+              <div className="max-h-56 overflow-y-auto border border-gray-100 rounded-lg mb-4">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-500 uppercase sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left">Channel</th>
+                      <th className="px-3 py-2 text-right">Stores</th>
+                      <th className="px-3 py-2 text-left">Will be set to</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {applyPreview.byChannel.map((c) => (
+                      <tr key={c.name}>
+                        <td className="px-3 py-1.5 text-gray-700">{c.name}</td>
+                        <td className="px-3 py-1.5 text-right text-gray-600">{c.count}</td>
+                        <td className="px-3 py-1.5 text-gray-600">{c.to}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              <p className="text-xs text-gray-500 mb-4">
+                <span className="font-medium text-gray-700">{applyPreview.wouldChange}</span> of{" "}
+                {applyPreview.totalStores} stores will change.{" "}
+                {applyPreview.keptOverridden} store(s) have a call override and are left alone.{" "}
+                {applyPreview.manualEditsProtected > 0 && (
+                  <>
+                    {applyPreview.manualEditsProtected} store(s) look hand-edited and will be kept
+                    as-is — an override record is created for each so they stay protected.
+                  </>
+                )}
+              </p>
+
+              <div className="flex gap-3">
+                <button
+                  onClick={applyDefaults}
+                  disabled={applyBusy}
+                  className="px-4 py-2 bg-iram-green text-white text-sm font-medium rounded-lg hover:bg-iram-green-dark disabled:opacity-50"
+                >
+                  {applyBusy ? "Applying..." : `Apply to ${applyPreview.wouldChange} store(s)`}
+                </button>
+                <button
+                  onClick={() => setApplyPreview(null)}
+                  className="px-4 py-2 text-gray-500 text-sm font-medium hover:text-gray-700"
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
 

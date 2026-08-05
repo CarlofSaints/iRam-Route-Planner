@@ -6,6 +6,9 @@ export interface Channel {
 }
 
 export type FrequencyType =
+  | "daily"
+  | "3x_weekly"
+  | "2x_weekly"
   | "weekly"
   | "3x_monthly"
   | "2x_monthly"
@@ -13,13 +16,31 @@ export type FrequencyType =
   | "bimonthly"
   | "quarterly";
 
-export const FREQUENCY_OPTIONS: { value: FrequencyType; label: string; monthlyRate: number }[] = [
-  { value: "weekly", label: "Weekly (4x/month)", monthlyRate: 4 },
-  { value: "3x_monthly", label: "3x per Month", monthlyRate: 3 },
-  { value: "2x_monthly", label: "2x per Month", monthlyRate: 2 },
-  { value: "monthly", label: "Once a Month", monthlyRate: 1 },
-  { value: "bimonthly", label: "Every 2nd Month", monthlyRate: 0.5 },
-  { value: "quarterly", label: "Once a Quarter", monthlyRate: 0.333 },
+/**
+ * monthlyRate is visits per month on the planner's own calendar, which is a
+ * 4-week cycle of 5 working days. So daily = 5 × 4 = 20, not 21.7. Keeping it
+ * consistent with the cycle the route engine actually builds is what stops a
+ * rep's capacity line disagreeing with the route they were given.
+ *
+ * visitsPerWeek is only meaningful for the sub-weekly frequencies: it is how
+ * many separate days in a week the store is called on. Everything weekly or
+ * slower is visited at most once in any given week, so it is 1.
+ */
+export const FREQUENCY_OPTIONS: {
+  value: FrequencyType;
+  label: string;
+  monthlyRate: number;
+  visitsPerWeek: number;
+}[] = [
+  { value: "daily", label: "Daily (every working day)", monthlyRate: 20, visitsPerWeek: 5 },
+  { value: "3x_weekly", label: "3x per Week", monthlyRate: 12, visitsPerWeek: 3 },
+  { value: "2x_weekly", label: "2x per Week", monthlyRate: 8, visitsPerWeek: 2 },
+  { value: "weekly", label: "Weekly (4x/month)", monthlyRate: 4, visitsPerWeek: 1 },
+  { value: "3x_monthly", label: "3x per Month", monthlyRate: 3, visitsPerWeek: 1 },
+  { value: "2x_monthly", label: "2x per Month", monthlyRate: 2, visitsPerWeek: 1 },
+  { value: "monthly", label: "Once a Month", monthlyRate: 1, visitsPerWeek: 1 },
+  { value: "bimonthly", label: "Every 2nd Month", monthlyRate: 0.5, visitsPerWeek: 1 },
+  { value: "quarterly", label: "Once a Quarter", monthlyRate: 0.333, visitsPerWeek: 1 },
 ];
 
 export function getFrequencyLabel(freq: FrequencyType): string {
@@ -28,6 +49,69 @@ export function getFrequencyLabel(freq: FrequencyType): string {
 
 export function getMonthlyRate(freq: FrequencyType): number {
   return FREQUENCY_OPTIONS.find((f) => f.value === freq)?.monthlyRate ?? 1;
+}
+
+/** How many separate days in a week this frequency is visited on. */
+export function getVisitsPerWeek(freq: FrequencyType): number {
+  return FREQUENCY_OPTIONS.find((f) => f.value === freq)?.visitsPerWeek ?? 1;
+}
+
+/**
+ * Spreadsheet-tolerant frequency parser.
+ *
+ * Uploads come from people typing into Excel, so "Weekly", "3x _weekly" and
+ * "Every 2nd month" all have to land on the right value. Matching used to be
+ * exact and case-sensitive against the stored value, which rejected 21 rows of
+ * a real channel import purely on capitalisation and a stray space.
+ *
+ * Returns null only when the text genuinely isn't a frequency we know.
+ */
+export function parseFrequency(raw: string): FrequencyType | null {
+  if (!raw) return null;
+
+  // Collapse case, punctuation and spacing: "3x _weekly" → "3xweekly"
+  const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const key = norm(raw);
+  if (!key) return null;
+
+  // Exact stored values and display labels first
+  for (const opt of FREQUENCY_OPTIONS) {
+    if (norm(opt.value) === key || norm(opt.label) === key) return opt.value;
+  }
+
+  const SYNONYMS: Record<string, FrequencyType> = {
+    // daily
+    daily: "daily", everyday: "daily", eachday: "daily", "5xweekly": "daily",
+    "5xweek": "daily", "5aweek": "daily", "5perweek": "daily", everyworkingday: "daily",
+    // 3x weekly
+    "3xweek": "3x_weekly", "3aweek": "3x_weekly", "3perweek": "3x_weekly",
+    "3timesaweek": "3x_weekly", "3timesweekly": "3x_weekly", threeweekly: "3x_weekly",
+    // 2x weekly
+    "2xweek": "2x_weekly", "2aweek": "2x_weekly", "2perweek": "2x_weekly",
+    "2timesaweek": "2x_weekly", "2timesweekly": "2x_weekly", twiceaweek: "2x_weekly",
+    twiceweekly: "2x_weekly", biweekly: "2x_weekly",
+    // weekly
+    "1xweekly": "weekly", "1xweek": "weekly", onceaweek: "weekly", everyweek: "weekly",
+    weekly4xmonth: "weekly",
+    // 3x monthly
+    "3xmonth": "3x_monthly", "3permonth": "3x_monthly", "3timesamonth": "3x_monthly",
+    "3timesmonthly": "3x_monthly",
+    // 2x monthly
+    "2xmonth": "2x_monthly", "2permonth": "2x_monthly", "2timesamonth": "2x_monthly",
+    "2timesmonthly": "2x_monthly", twiceamonth: "2x_monthly", twicemonthly: "2x_monthly",
+    fortnightly: "2x_monthly", everyfortnight: "2x_monthly", every2weeks: "2x_monthly",
+    // monthly
+    "1xmonthly": "monthly", "1xmonth": "monthly", onceamonth: "monthly",
+    everymonth: "monthly", permonth: "monthly",
+    // bimonthly
+    bimonthly: "bimonthly", every2ndmonth: "bimonthly", every2months: "bimonthly",
+    everysecondmonth: "bimonthly", everyothermonth: "bimonthly", "2monthly": "bimonthly",
+    // quarterly
+    quarterly: "quarterly", onceaquarter: "quarterly", perquarter: "quarterly",
+    every3months: "quarterly", every3rdmonth: "quarterly", "3monthly": "quarterly",
+  };
+
+  return SYNONYMS[key] ?? null;
 }
 
 export interface Rep {
@@ -174,13 +258,13 @@ export const ROLE_DEFINITIONS: RolePermission[] = [
     role: "superAdmin",
     label: "Super Admin",
     description: "Full unrestricted access",
-    permissions: ["manage_super_admins", "manage_users", "manage_roles", "manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
+    permissions: ["manage_super_admins", "manage_users", "manage_roles", "manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
   },
   {
     role: "admin",
     label: "Admin",
     description: "Manage reps, stores, channels, and view reports",
-    permissions: ["manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
+    permissions: ["manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
   },
   {
     role: "teamManager",
@@ -212,6 +296,8 @@ export const ALL_PERMISSIONS = [
   { key: "manage_store_overrides", label: "Manage Store Call Overrides" },
   { key: "manage_channels", label: "Manage Channels" },
   { key: "manage_routes", label: "Manage Routes" },
+  { key: "generate_routes", label: "Generate Routes" },
+  { key: "import_reps", label: "Import Rep List" },
   { key: "manage_call_cycles", label: "Manage Call Cycles" },
   { key: "manage_channel_map", label: "Manage Channel Map" },
   { key: "manage_regions", label: "Manage Regions" },

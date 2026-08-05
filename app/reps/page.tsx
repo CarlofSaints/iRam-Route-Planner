@@ -1,11 +1,14 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { Rep, VisitRole } from "@/lib/types";
+import { useState, useEffect, useRef } from "react";
+import { Rep, VisitRole, Team } from "@/lib/types";
+import { useSession } from "@/components/SessionProvider";
 
 export default function RepsPage() {
+  const { can } = useSession();
   const [reps, setReps] = useState<Rep[]>([]);
   const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
+  const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Rep>>({});
@@ -13,6 +16,13 @@ export default function RepsPage() {
   const [showAdd, setShowAdd] = useState(false);
   const [newRep, setNewRep] = useState<Partial<Rep>>({ code: "", name: "", email: "", cell: "", homeAddress: "", workingHoursPerDay: 8.5 });
   const [error, setError] = useState("");
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
+  const [savingTeamFor, setSavingTeamFor] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+
+  const canExport = can("export_data");
+  const canImport = can("import_reps");
 
   const load = () => {
     fetch("/api/reps")
@@ -29,7 +39,60 @@ export default function RepsPage() {
       .then((r) => r.json())
       .then((data) => setVisitRoles(Array.isArray(data) ? data : []))
       .catch(() => setVisitRoles([]));
+    fetch("/api/teams")
+      .then((r) => r.json())
+      .then((data) => setTeams(Array.isArray(data) ? data : []))
+      .catch(() => setTeams([]));
   }, []);
+
+  /**
+   * Assign straight from the row. Dragging reps into team cards is fine for a
+   * handful of people but unusable at 147, which is what this list holds.
+   */
+  const setTeamForRep = async (rep: Rep, teamId: string) => {
+    setSavingTeamFor(rep.id);
+    // Optimistic — the dropdown should feel instant
+    setReps((prev) => prev.map((r) => (r.id === rep.id ? { ...r, teamId } : r)));
+    try {
+      const res = await fetch("/api/reps", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: rep.id, teamId }),
+      });
+      if (!res.ok) load(); // revert to server truth
+    } catch {
+      load();
+    } finally {
+      setSavingTeamFor(null);
+    }
+  };
+
+  const handleImport = async (file: File) => {
+    setImporting(true);
+    setImportMsg(null);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch("/api/reps/import", { method: "POST", body: fd });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setImportMsg({ type: "error", text: data.error || `Import failed (${res.status})` });
+      } else {
+        const parts = [`${data.created} created`, `${data.updated} updated`];
+        if (data.errors?.length) parts.push(`${data.errors.length} rejected`);
+        setImportMsg({
+          type: data.errors?.length ? "error" : "success",
+          text: `${parts.join(", ")}.${data.errors?.length ? " " + data.errors.slice(0, 5).join("; ") + (data.errors.length > 5 ? ` …and ${data.errors.length - 5} more` : "") : ""}`,
+        });
+        load();
+      }
+    } catch (e) {
+      setImportMsg({ type: "error", text: String(e) });
+    } finally {
+      setImporting(false);
+      if (fileInput.current) fileInput.current.value = "";
+    }
+  };
 
   // A rep with no visitRoleId is on the primary sales role.
   const roleName = (id?: string) => {
@@ -108,18 +171,38 @@ export default function RepsPage() {
           <p className="text-sm text-gray-500">{reps.length} reps</p>
         </div>
         <div className="flex items-center gap-2">
-          <a
-            href="/api/reps/export?format=xlsx"
-            className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Export Excel
-          </a>
-          <a
-            href="/api/reps/export?format=csv"
-            className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
-          >
-            Export CSV
-          </a>
+          {canExport && (
+            <>
+              <a
+                href="/api/reps/export?format=xlsx"
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Export Excel
+              </a>
+              <a
+                href="/api/reps/export?format=csv"
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors"
+              >
+                Export CSV
+              </a>
+            </>
+          )}
+          {canImport && (
+            <label className={`px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg transition-colors ${importing ? "opacity-50" : "hover:bg-gray-50 cursor-pointer"}`}>
+              {importing ? "Importing..." : "Import Reps"}
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".xlsx,.xls,.csv"
+                className="hidden"
+                disabled={importing}
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) handleImport(f);
+                }}
+              />
+            </label>
+          )}
           <button
             onClick={() => setShowAdd(true)}
             className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors"
@@ -128,6 +211,26 @@ export default function RepsPage() {
           </button>
         </div>
       </div>
+
+      {canImport && (
+        <p className="text-xs text-gray-400 -mt-4 mb-4">
+          Export the list, edit it in Excel, then import it back. Reps are matched on Rep Code —
+          edit the Team column to reassign people in bulk.
+        </p>
+      )}
+
+      {importMsg && (
+        <div
+          className={`p-3 rounded-lg text-sm mb-6 flex items-start justify-between gap-4 ${
+            importMsg.type === "success" ? "bg-green-50 text-green-700" : "bg-red-50 text-red-700"
+          }`}
+        >
+          <span>{importMsg.text}</span>
+          <button onClick={() => setImportMsg(null)} className="text-xs opacity-60 hover:opacity-100 flex-shrink-0">
+            dismiss
+          </button>
+        </div>
+      )}
 
       {/* Add Rep Form */}
       {showAdd && (
@@ -196,6 +299,7 @@ export default function RepsPage() {
                 <th className="px-6 py-3">Email</th>
                 <th className="px-6 py-3">Cell</th>
                 <th className="px-6 py-3">Home Address</th>
+                <th className="px-6 py-3">Team</th>
                 <th className="px-6 py-3">Visit Role</th>
                 <th className="px-6 py-3 text-center">Hours/Day</th>
                 <th className="px-6 py-3 text-right">Actions</th>
@@ -243,6 +347,18 @@ export default function RepsPage() {
                       </td>
                       <td className="px-6 py-3">
                         <select
+                          value={editData.teamId ?? ""}
+                          onChange={(e) => setEditData({ ...editData, teamId: e.target.value })}
+                          className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+                        >
+                          <option value="">Unassigned</option>
+                          {teams.map((t) => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      </td>
+                      <td className="px-6 py-3">
+                        <select
                           value={editData.visitRoleId ?? ""}
                           onChange={(e) => setEditData({ ...editData, visitRoleId: e.target.value })}
                           className="border border-gray-200 rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
@@ -283,6 +399,23 @@ export default function RepsPage() {
                       <td className="px-6 py-3 text-gray-600">{rep.email || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600">{rep.cell || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600 max-w-[200px] truncate">{rep.homeAddress || <span className="text-gray-300 italic">Not set</span>}</td>
+                      <td className="px-6 py-3">
+                        {/* Live dropdown — no need to enter edit mode just to
+                            move someone between teams. */}
+                        <select
+                          value={rep.teamId || ""}
+                          disabled={savingTeamFor === rep.id}
+                          onChange={(e) => setTeamForRep(rep, e.target.value)}
+                          className={`border rounded px-2 py-1 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green disabled:opacity-50 ${
+                            rep.teamId ? "border-gray-200 text-gray-700" : "border-amber-200 bg-amber-50 text-amber-700"
+                          }`}
+                        >
+                          <option value="">Unassigned</option>
+                          {teams.map((t) => (
+                            <option key={t.id} value={t.id}>{t.name}</option>
+                          ))}
+                        </select>
+                      </td>
                       <td className="px-6 py-3 text-gray-600">{roleName(rep.visitRoleId)}</td>
                       <td className="px-6 py-3 text-center text-gray-600">{rep.workingHoursPerDay ?? 8.5}</td>
                       <td className="px-6 py-3 text-right space-x-2">

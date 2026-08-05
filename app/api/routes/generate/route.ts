@@ -4,13 +4,21 @@ import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
 import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
 import { hasGoogleMapsKey } from "@/lib/google-maps";
-import { getSession } from "@/lib/auth";
+import { getSession, sessionHasPermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 
 export const maxDuration = 120;
 
 export async function POST(request: NextRequest) {
   try {
+    // The route had no authorisation of its own — a hidden button was the only
+    // thing stopping a viewer from regenerating everyone's routes.
+    const session = await getSession();
+    if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!(await sessionHasPermission(session, "generate_routes"))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+
     const body = await request.json().catch(() => ({}));
     const repCodes: string[] | undefined = body.repCodes;
 
@@ -94,7 +102,6 @@ export async function POST(request: NextRequest) {
     }
     await saveRoutes(doc);
 
-    const session = await getSession();
     logActivity({ action: "Generated routes", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Generated routes for ${repPlans.length} reps${activeType ? ` (${activeType.name})` : ""}` });
 
     return NextResponse.json(doc);

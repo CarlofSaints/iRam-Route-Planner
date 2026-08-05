@@ -7,6 +7,7 @@ import {
   RepRoutePlan,
   WeekLabel,
   DayLabel,
+  getVisitsPerWeek,
 } from "./types";
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
 
@@ -72,8 +73,24 @@ export async function generateRepRoute(
     const weekStores = weekAssignments.get(week) || [];
     if (weekStores.length === 0) continue;
 
+    // Stores called on more than once a week (daily, 3x/2x weekly) can't be
+    // handed to the clusterer, which places each store on exactly one day.
+    // They are pinned to evenly spread days instead, and only the once-a-week
+    // remainder gets clustered geographically.
+    const multiDay: Store[] = [];
+    const singleDay: Store[] = [];
+    for (const s of weekStores) {
+      (getVisitsPerWeek(s.frequency || "monthly") > 1 ? multiDay : singleDay).push(s);
+    }
+
     // Cluster into 5 day groups
-    const clusters = clusterIntoDays(weekStores, home);
+    const clusters = clusterIntoDays(singleDay, home);
+
+    for (const store of multiDay) {
+      for (const dayIdx of spreadAcrossDays(getVisitsPerWeek(store.frequency || "monthly"))) {
+        (clusters[dayIdx] ||= []).push(store);
+      }
+    }
 
     for (let dayIdx = 0; dayIdx < DAYS.length; dayIdx++) {
       const dayStores = clusters[dayIdx] || [];
@@ -145,6 +162,23 @@ export async function generateRepRoute(
 // Step 1: Frequency → Week Distribution
 // ──────────────────────────────────────────────
 
+/**
+ * Which day indexes a store visited n times a week should land on, spread as
+ * evenly as the 5-day week allows: 5 → every day, 3 → Mon/Wed/Fri,
+ * 2 → Mon/Fri. Keeping the gaps even matters because these are service calls,
+ * not just extra volume — two visits on consecutive days is not the same
+ * coverage as two visits three days apart.
+ */
+function spreadAcrossDays(visitsPerWeek: number): number[] {
+  const n = Math.max(1, Math.min(visitsPerWeek, DAYS.length));
+  if (n === 1) return [0];
+  if (n >= DAYS.length) return DAYS.map((_, i) => i);
+  const last = DAYS.length - 1;
+  const days = new Set<number>();
+  for (let i = 0; i < n; i++) days.add(Math.round((i * last) / (n - 1)));
+  return [...days].sort((a, b) => a - b);
+}
+
 function distributeToWeeks(stores: Store[]): Map<WeekLabel, Store[]> {
   const result = new Map<WeekLabel, Store[]>();
   for (const w of WEEKS) result.set(w, []);
@@ -156,8 +190,12 @@ function distributeToWeeks(stores: Store[]): Map<WeekLabel, Store[]> {
   for (const store of stores) {
     const freq: FrequencyType = store.frequency || "monthly";
     switch (freq) {
+      case "daily":
+      case "3x_weekly":
+      case "2x_weekly":
       case "weekly":
-        // Visit every week
+        // Present in every week. How many DAYS within each week is decided
+        // later, by visitsPerWeek — see generateRepRoute.
         for (const w of WEEKS) result.get(w)!.push(store);
         break;
       case "3x_monthly":
