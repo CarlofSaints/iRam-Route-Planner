@@ -101,35 +101,37 @@ export default function ChannelsPage() {
   const leftNum = widthOf("select");
   const leftName = widthOf("select") + widthOf("num");
 
-  /**
-   * Drag a column edge. Pointer capture keeps the drag alive when the cursor
-   * leaves the 6px grip, which is otherwise very easy to do.
-   */
+  /** Drag a column edge. */
   const startResize = (key: string, e: React.PointerEvent<HTMLSpanElement>) => {
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
     const startWidth = widthOf(key);
-    const handle = e.currentTarget;
-    handle.setPointerCapture(e.pointerId);
-
     let latest = startWidth;
+
+    // The listeners go on WINDOW, not on the grip.
+    //
+    // Every pointermove re-renders this table, and re-rendering replaces the
+    // grip's DOM node. Anything bound to that node — listeners, pointer
+    // capture — dies with it on the very first move, and the drag with it.
     const onMove = (ev: PointerEvent) => {
       latest = Math.max(COL_MIN, Math.round(startWidth + (ev.clientX - startX)));
       setColWidths((prev) => ({ ...prev, [key]: latest }));
     };
     const onUp = () => {
-      handle.releasePointerCapture(e.pointerId);
-      handle.removeEventListener("pointermove", onMove);
-      handle.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      document.body.style.userSelect = "";
       setColWidths((prev) => {
         const next = { ...prev, [key]: latest };
         persistWidths(next);
         return next;
       });
     };
-    handle.addEventListener("pointermove", onMove);
-    handle.addEventListener("pointerup", onUp);
+    // Dragging across a table otherwise selects every cell it crosses.
+    document.body.style.userSelect = "none";
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
   };
 
   /** Double-click a grip to put that column back to its default. */
@@ -147,14 +149,27 @@ export default function ChannelsPage() {
     persistWidths({});
   };
 
-  /** The drag grip. Sits on the row-2 header cell but spans both header rows. */
-  const ResizeGrip = ({ colKey }: { colKey: string }) => (
+  /**
+   * The drag grip. Sits on the row-2 header cell but spans both header rows so
+   * the target is the full header height, not the 20px sub-row.
+   *
+   * Deliberately a plain function returning a <span>, NOT a nested component.
+   * A component declared inside this one gets a fresh identity on every render,
+   * so React tears down and rebuilds its DOM node each time the width changes —
+   * which is mid-drag, every frame.
+   *
+   * The hairline is always visible: a 6px invisible hit area is impossible to
+   * find if nothing marks where the edges are.
+   */
+  const renderGrip = (colKey: string) => (
     <span
       onPointerDown={(e) => startResize(colKey, e)}
       onDoubleClick={() => resetColumn(colKey)}
       title="Drag to resize — double-click to reset"
-      className="absolute -top-11 bottom-0 right-0 w-1.5 cursor-col-resize hover:bg-iram-green/40 active:bg-iram-green z-50"
-    />
+      className="absolute -top-11 bottom-0 right-0 w-2 cursor-col-resize z-50 hover:bg-iram-green/30"
+    >
+      <span className="absolute right-0 top-0 bottom-0 w-px bg-gray-300" />
+    </span>
   );
 
   const load = () => {
@@ -664,7 +679,12 @@ export default function ChannelsPage() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-        <div className="overflow-auto max-h-[calc(100vh-20rem)]">
+        {/* 20rem of reserved space was roughly double what the page header and
+            toolbar actually occupy (~11rem), so a third of the screen went
+            unused. 12rem leaves them room and gives the rest to rows. The
+            viewport is the hard ceiling here — the header can only stay frozen
+            while THIS container is the thing that scrolls. */}
+        <div className="overflow-auto max-h-[calc(100vh-12rem)]">
           <table className="text-sm border-separate border-spacing-0 table-fixed">
             <colgroup>
               {columns.map((c) => (
@@ -719,34 +739,34 @@ export default function ChannelsPage() {
                   style={{ left: leftSelect }}
                   className="sticky top-11 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative"
                 >
-                  <ResizeGrip colKey="select" />
+                  {renderGrip("select")}
                 </th>
                 <th
                   style={{ left: leftNum }}
                   className="sticky top-11 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative"
                 >
-                  <ResizeGrip colKey="num" />
+                  {renderGrip("num")}
                 </th>
                 <th
                   style={{ left: leftName }}
                   className="sticky top-11 z-40 bg-gray-50 px-6 pb-2 border-b border-r border-gray-200 relative"
                 >
-                  <ResizeGrip colKey="name" />
+                  {renderGrip("name")}
                 </th>
                 {visitRoles.map((role) => (
                   <Fragment key={role.id}>
                     <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-l border-b border-gray-200 relative">
                       Frequency
-                      <ResizeGrip colKey={freqKey(role.id)} />
+                      {renderGrip(freqKey(role.id))}
                     </th>
                     <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 text-right border-b border-gray-200 relative">
                       Duration
-                      <ResizeGrip colKey={durKey(role.id)} />
+                      {renderGrip(durKey(role.id))}
                     </th>
                   </Fragment>
                 ))}
                 <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-b border-gray-200 relative">
-                  <ResizeGrip colKey="actions" />
+                  {renderGrip("actions")}
                 </th>
               </tr>
             </thead>
