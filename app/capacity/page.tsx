@@ -154,18 +154,25 @@ export default function CapacityPage() {
   const groupedOutliers = useMemo(() => {
     const map = new Map<
       string,
-      { repName: string; storeName: string; channel: string; distanceKm: number; province: string; gpsLat: string; gpsLng: string; outsideSA: boolean; storeIds: string[] }
+      { repName: string; repCode: string; storeName: string; channel: string; distanceKm: number; province: string; gpsLat: string; gpsLng: string; outsideSA: boolean; storeIds: string[] }
     >();
     for (const o of scopedOutliers) {
       const key = `${o.repCode}||${o.storeName.trim().toUpperCase()}`;
       const g = map.get(key);
       if (g) g.storeIds.push(o.storeId);
-      else map.set(key, { repName: o.repName, storeName: o.storeName, channel: o.channel, distanceKm: o.distanceKm, province: o.province, gpsLat: o.gpsLat, gpsLng: o.gpsLng, outsideSA: o.outsideSA, storeIds: [o.storeId] });
+      else map.set(key, { repName: o.repName, repCode: o.repCode, storeName: o.storeName, channel: o.channel, distanceKm: o.distanceKm, province: o.province, gpsLat: o.gpsLat, gpsLng: o.gpsLng, outsideSA: o.outsideSA, storeIds: [o.storeId] });
     }
     return [...map.values()].sort((a, b) => b.distanceKm - a.distanceKm);
   }, [scopedOutliers]);
 
   const outlierCount = (repCode: string) => outliers?.perRep?.[repCode] ?? 0;
+
+  // Capacity rows already carry the resolved role name, so the outlier table
+  // can reuse it rather than fetching visit roles a second time.
+  const roleNameByRepCode = useMemo(
+    () => new Map<string, string>(reps.map((r) => [r.repCode, r.visitRoleName ?? ""])),
+    [reps]
+  );
 
   const sorted = useMemo(
     () => [...reps].sort((a, b) => b.utilization - a.utilization),
@@ -321,15 +328,13 @@ export default function CapacityPage() {
                 return (
                   <tr key={r.repCode} className="hover:bg-gray-50">
                     <td className="px-4 py-3">
-                      <div className="font-medium text-gray-900">{r.repName}</div>
-                      <div className="text-xs text-gray-400 font-mono">
-                        {r.repCode}
-                        {r.visitRoleName && r.visitRoleId !== "sales" && (
-                          <span className="ml-2 px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-sans not-italic">
-                            {r.visitRoleName}
-                          </span>
+                      <div className="font-medium text-gray-900">
+                        {r.repName}
+                        {r.visitRoleName && (
+                          <span className="font-normal text-gray-400"> ({r.visitRoleName})</span>
                         )}
                       </div>
+                      <div className="text-xs text-gray-400 font-mono">{r.repCode}</div>
                     </td>
                     {isAdmin && <td className="px-4 py-3 text-gray-600">{teamName(r.teamId)}</td>}
                     <td className="px-4 py-3 text-right text-gray-700">{r.storeCount}</td>
@@ -460,7 +465,12 @@ export default function CapacityPage() {
             <tbody className="divide-y divide-gray-100">
               {groupedOutliers.map((g) => (
                 <tr key={g.storeIds[0]} className="hover:bg-gray-50">
-                  <td className="px-4 py-3 text-gray-700">{g.repName}</td>
+                  <td className="px-4 py-3 text-gray-700">
+                    {g.repName}
+                    {roleNameByRepCode.get(g.repCode) && (
+                      <span className="text-gray-400"> ({roleNameByRepCode.get(g.repCode)})</span>
+                    )}
+                  </td>
                   <td className="px-4 py-3 font-medium text-gray-900">
                     {g.storeName}
                     {g.storeIds.length > 1 && (

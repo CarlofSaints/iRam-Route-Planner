@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Store, Channel, Rep, Team, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel, SA_PROVINCES } from "@/lib/types";
+import { Store, Channel, Rep, Team, VisitRole, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel, getVisitRoleName, SA_PROVINCES } from "@/lib/types";
 
 const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WEEKS = ["", "Wk1", "Wk2", "Wk3", "Wk4", "Wk5"];
@@ -156,6 +156,7 @@ export default function StoresPage() {
   const [stores, setStores] = useState<Store[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
@@ -178,12 +179,14 @@ export default function StoresPage() {
       fetch("/api/reps").then((r) => r.json()).catch(() => []),
       fetch("/api/regions").then((r) => r.json()).catch(() => []),
       fetch("/api/teams").then((r) => r.json()).catch(() => []),
-    ]).then(([st, ch, rp, reg, tm]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([st, ch, rp, reg, tm, vr]) => {
       setStores(Array.isArray(st) ? st : []);
       setChannels(Array.isArray(ch) ? ch : []);
       setReps(Array.isArray(rp) ? rp : []);
       setRegionList(Array.isArray(reg) ? reg : []);
       setTeams(Array.isArray(tm) ? tm : []);
+      setVisitRoles(Array.isArray(vr) ? vr : []);
       setLoading(false);
     });
   };
@@ -232,8 +235,12 @@ export default function StoresPage() {
     [channels]
   );
   const repOptions = useMemo(
-    () => reps.map((r) => ({ value: r.code, label: `${r.name} (${r.code})` })),
-    [reps]
+    () =>
+      reps.map((r) => ({
+        value: r.code,
+        label: `${r.name} (${getVisitRoleName(r.visitRoleId, visitRoles)}) · ${r.code}`,
+      })),
+    [reps, visitRoles]
   );
   const provinceOptions = useMemo(() => {
     const set = new Set<string>();
@@ -575,7 +582,9 @@ export default function StoresPage() {
                             className="border border-gray-200 rounded px-1 py-0.5 text-xs w-full"
                           >
                             {reps.map((r) => (
-                              <option key={r.code} value={r.code}>{r.name}</option>
+                              <option key={r.code} value={r.code}>
+                                {r.name} ({getVisitRoleName(r.visitRoleId, visitRoles)})
+                              </option>
                             ))}
                           </select>
                         </td>
@@ -664,7 +673,14 @@ export default function StoresPage() {
                         >
                           {store.gpsLng?.trim() || "\u2014"}
                         </td>
-                        <td className="px-3 py-2 text-gray-600">{rep?.name || store.repCode}</td>
+                        <td className="px-3 py-2 text-gray-600">
+                          {rep?.name || store.repCode}
+                          {rep && (
+                            <span className="text-gray-400">
+                              {" "}({getVisitRoleName(rep.visitRoleId, visitRoles)})
+                            </span>
+                          )}
+                        </td>
                         <td className="px-3 py-2 text-right text-gray-600">{fmt(store.monthlySales)}</td>
                         <td className="px-3 py-2 text-center">
                           <span className="inline-flex items-center justify-center w-7 h-5 rounded bg-blue-50 text-blue-700 font-medium">

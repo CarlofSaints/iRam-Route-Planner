@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
-import { Channel, Rep, Store, Team, PerigeeVisit } from "@/lib/types";
+import { Channel, Rep, Store, Team, PerigeeVisit, VisitRole, getVisitRoleName } from "@/lib/types";
 
 type SortDir = "asc" | "desc";
 
@@ -78,6 +78,7 @@ function SortHeader({
 export default function DashboardPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [visits, setVisits] = useState<PerigeeVisit[]>([]);
@@ -96,12 +97,14 @@ export default function DashboardPage() {
       fetch("/api/stores").then((r) => r.json()).catch(() => []),
       fetch("/api/teams").then((r) => r.json()).catch(() => []),
       fetch(`/api/perigee/visits?from=${from}&to=${to}`).then((r) => r.json()).catch(() => []),
-    ]).then(([ch, rp, st, tm, vs]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([ch, rp, st, tm, vs, vr]) => {
       setChannels(Array.isArray(ch) ? ch : []);
       setReps(Array.isArray(rp) ? rp : []);
       setStores(Array.isArray(st) ? st : []);
       setTeams(Array.isArray(tm) ? tm : []);
       setVisits(Array.isArray(vs) ? vs : []);
+      setVisitRoles(Array.isArray(vr) ? vr : []);
       setLoading(false);
     });
   }, []);
@@ -396,7 +399,7 @@ export default function DashboardPage() {
             <tbody className="divide-y divide-gray-100">
               {repSort.sorted.map((rep) => (
                 <tr key={rep.id} className="hover:bg-gray-50">
-                  <td className="px-6 py-3 font-medium text-gray-900">{rep.name}</td>
+                  <td className="px-6 py-3 font-medium text-gray-900">{rep.name}<span className="font-normal text-gray-400"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span></td>
                   <td className="px-6 py-3 text-gray-500">{rep.code}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{rep.storeCount}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{fmt(rep.revenue)}</td>

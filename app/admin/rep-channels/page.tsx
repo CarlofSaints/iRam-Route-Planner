@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { VisitRole, getVisitRoleName } from "@/lib/types";
 
 interface Channel {
   id: string;
@@ -12,11 +13,13 @@ interface Rep {
   code: string;
   name: string;
   assignedChannels?: string[];
+  visitRoleId?: string;
 }
 
 export default function RepChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
@@ -34,14 +37,16 @@ export default function RepChannelsPage() {
 
   const load = useCallback(async () => {
     try {
-      const [chRes, repRes] = await Promise.all([
+      const [chRes, repRes, vrRes] = await Promise.all([
         fetch("/api/channels"),
         fetch("/api/reps"),
+        fetch("/api/visit-roles"),
       ]);
       const chData: Channel[] = await chRes.json();
       const repData: Rep[] = await repRes.json();
       setChannels(chData);
       setReps(repData);
+      setVisitRoles(await vrRes.json().catch(() => []));
 
       // Build matrix from current rep data
       const m: Record<string, Set<string>> = {};
@@ -189,7 +194,7 @@ export default function RepChannelsPage() {
                 return (
                   <tr key={rep.id} className="hover:bg-gray-50">
                     <td className="px-6 py-3 sticky left-0 bg-white z-10">
-                      <div className="font-medium text-gray-900">{rep.name}</div>
+                      <div className="font-medium text-gray-900">{rep.name}<span className="font-normal text-gray-400"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span></div>
                       <div className="text-xs text-gray-400">{rep.code}</div>
                     </td>
                     {channels.map((ch) => {

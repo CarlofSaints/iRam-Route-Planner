@@ -153,6 +153,35 @@ export interface VisitRole {
 
 export const PRIMARY_VISIT_ROLE_ID = "sales";
 
+/**
+ * The name of the visit role a rep performs.
+ *
+ * A rep with no `visitRoleId` IS the primary role — that absence is what keeps
+ * every rep predating visit roles working — so this resolves to the primary
+ * role's name rather than to an empty string. Rendering the absence as blank is
+ * what made the exported Visit Role column look broken for all 227 reps.
+ */
+export function getVisitRoleName(
+  visitRoleId: string | undefined,
+  roles: VisitRole[]
+): string {
+  const match = visitRoleId ? roles.find((r) => r.id === visitRoleId) : undefined;
+  return match?.name ?? roles.find((r) => r.isPrimary)?.name ?? "Sales Rep";
+}
+
+/**
+ * "Dean Smith (Sales Rep)" — the one way a rep is named in the UI.
+ *
+ * Two people can cover the same store in different roles, so a bare name is
+ * ambiguous wherever reps are picked or listed.
+ */
+export function repLabel(
+  rep: { name: string; visitRoleId?: string },
+  roles: VisitRole[]
+): string {
+  return `${rep.name} (${getVisitRoleName(rep.visitRoleId, roles)})`;
+}
+
 export const DEFAULT_VISIT_ROLES: VisitRole[] = [
   { id: PRIMARY_VISIT_ROLE_ID, name: "Sales Rep", frequency: "monthly", duration: 30, isPrimary: true, checkOutliers: true },
   { id: "qc", name: "QC", frequency: "quarterly", duration: 60, isPrimary: false, checkOutliers: false },

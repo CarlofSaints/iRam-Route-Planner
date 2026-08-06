@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Team, Rep } from "@/lib/types";
+import { Team, Rep, VisitRole, getVisitRoleName } from "@/lib/types";
 
 export default function TeamsPage() {
   const [teams, setTeams] = useState<Team[]>([]);
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [newTeam, setNewTeam] = useState<Partial<Team>>({ name: "", managerName: "", managerEmail: "", managerCell: "", area: "" });
@@ -25,9 +26,11 @@ export default function TeamsPage() {
     Promise.all([
       fetch("/api/teams").then((r) => r.json()),
       fetch("/api/reps").then((r) => r.json()),
-    ]).then(([t, r]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([t, r, vr]) => {
       setTeams(t);
       setReps(r);
+      setVisitRoles(Array.isArray(vr) ? vr : []);
       setLoading(false);
     });
   };
@@ -409,7 +412,7 @@ export default function TeamsPage() {
                             <path d="M7 2a2 2 0 10.001 4.001A2 2 0 007 2zm6 0a2 2 0 10.001 4.001A2 2 0 0013 2zM7 8a2 2 0 10.001 4.001A2 2 0 007 8zm6 0a2 2 0 10.001 4.001A2 2 0 0013 8zM7 14a2 2 0 10.001 4.001A2 2 0 007 14zm6 0a2 2 0 10.001 4.001A2 2 0 0013 14z" />
                           </svg>
                           <span className="text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600">{rep.code}</span>
-                          <span className="text-sm text-gray-900">{rep.name}</span>
+                          <span className="text-sm text-gray-900">{rep.name}<span className="text-gray-400"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span></span>
                         </div>
                         <div className="flex items-center gap-2 flex-shrink-0">
                           <TeamPicker rep={rep} />
@@ -517,7 +520,7 @@ export default function TeamsPage() {
                   <path d="M7 2a2 2 0 10.001 4.001A2 2 0 007 2zm6 0a2 2 0 10.001 4.001A2 2 0 0013 2zM7 8a2 2 0 10.001 4.001A2 2 0 007 8zm6 0a2 2 0 10.001 4.001A2 2 0 0013 8zM7 14a2 2 0 10.001 4.001A2 2 0 007 14zm6 0a2 2 0 10.001 4.001A2 2 0 0013 14z" />
                 </svg>
                 <span className="text-xs font-mono bg-gray-100 px-1.5 py-0.5 rounded text-gray-600 pointer-events-none">{rep.code}</span>
-                <span className="text-sm text-gray-900 pointer-events-none">{rep.name}</span>
+                <span className="text-sm text-gray-900 pointer-events-none">{rep.name}<span className="text-gray-400"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span></span>
                 <TeamPicker rep={rep} />
               </div>
             ))}

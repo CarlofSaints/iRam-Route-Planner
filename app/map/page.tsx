@@ -4,7 +4,7 @@ import { Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useSession } from "@/components/SessionProvider";
-import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, CallCycleStrategy } from "@/lib/types";
+import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, CallCycleStrategy, VisitRole, getVisitRoleName } from "@/lib/types";
 import { decodePolyline } from "@/lib/google-maps";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
@@ -32,11 +32,13 @@ function RepSearchSelect({
   value,
   onChange,
   colors,
+  visitRoles,
 }: {
   reps: Rep[];
   value: string;
   onChange: (code: string) => void;
   colors: Record<string, string>;
+  visitRoles: VisitRole[];
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -62,9 +64,11 @@ function RepSearchSelect({
       (r) =>
         r.name.toLowerCase().includes(q) ||
         r.code.toLowerCase().includes(q) ||
-        (r.email || "").toLowerCase().includes(q)
+        (r.email || "").toLowerCase().includes(q) ||
+        // Searchable by role too, so "qc" lists everyone doing QC calls.
+        getVisitRoleName(r.visitRoleId, visitRoles).toLowerCase().includes(q)
     );
-  }, [reps, search]);
+  }, [reps, search, visitRoles]);
 
   const selected = reps.find((r) => r.code === value);
 
@@ -80,7 +84,14 @@ function RepSearchSelect({
         className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-iram-green min-w-44"
         style={{ color: selected ? colors[selected.code] || "#111827" : "#111827" }}
       >
-        <span className="truncate">{selected ? selected.name : "All Reps"}</span>
+        <span className="truncate">
+          {selected ? selected.name : "All Reps"}
+          {selected && (
+            <span className="font-normal text-gray-500">
+              {" "}({getVisitRoleName(selected.visitRoleId, visitRoles)})
+            </span>
+          )}
+        </span>
         <svg
           className={`w-3.5 h-3.5 ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
           fill="none"
@@ -137,6 +148,9 @@ function RepSearchSelect({
                   <span className="truncate font-medium" style={{ color: colors[r.code] || "#111827" }}>
                     {r.name}
                   </span>
+                  <span className="text-[11px] text-gray-500 flex-shrink-0">
+                    ({getVisitRoleName(r.visitRoleId, visitRoles)})
+                  </span>
                   <span className="ml-auto text-[10px] text-gray-400 font-mono flex-shrink-0">{r.code}</span>
                 </button>
               ))
@@ -156,6 +170,7 @@ function MapPageInner() {
   const [reps, setReps] = useState<Rep[]>([]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [routes, setRoutes] = useState<RoutePlanDocument | null>(null);
   const [loading, setLoading] = useState(true);
   const [routeTypes, setRouteTypes] = useState<RouteTypeInfo[]>([]);
@@ -179,11 +194,13 @@ function MapPageInner() {
       fetch("/api/teams").then((r) => r.json()).catch(() => []),
       fetch("/api/routes").then((r) => r.json()).catch(() => null),
       fetch("/api/routes/types").then((r) => r.json()).catch(() => []),
-    ]).then(([st, rp, ch, tm, rt, types]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([st, rp, ch, tm, rt, types, vr]) => {
       setStores(Array.isArray(st) ? st : []);
       setReps(Array.isArray(rp) ? rp : []);
       setChannels(Array.isArray(ch) ? ch : []);
       setTeams(Array.isArray(tm) ? tm : []);
+      setVisitRoles(Array.isArray(vr) ? vr : []);
       setRoutes(rt && typeof rt === "object" && "repPlans" in rt ? rt : null);
 
       const typesArr: RouteTypeInfo[] = Array.isArray(types) ? types : [];
@@ -298,15 +315,28 @@ function MapPageInner() {
     });
   }, [matchingDayPlans, filterRep, repMap]);
 
-  // Get rep home for route display
+  // Stop 0 — where the day starts and ends.
+  //
+  // If the rep has no home GPS the engine anchors their route on the centroid
+  // of their stores instead, and that anchor is saved on the plan. Showing it
+  // is more useful than showing nothing, but it is flagged as derived so it is
+  // never mistaken for an actual home address.
   const repHome = useMemo(() => {
     if (!showRoute || !filterRep) return null;
     const rep = repMap.get(filterRep);
     if (!rep) return null;
+
     const lat = parseFloat(rep.homeGpsLat);
     const lng = parseFloat(rep.homeGpsLng);
-    return !isNaN(lat) && !isNaN(lng) ? { lat, lng } : null;
-  }, [showRoute, filterRep, repMap]);
+    if (!isNaN(lat) && !isNaN(lng)) {
+      return { lat, lng, derived: false, address: rep.homeAddress };
+    }
+
+    const planned = routes?.repPlans.find((p) => p.repCode === filterRep)?.homeLatLng;
+    if (planned) return { lat: planned.lat, lng: planned.lng, derived: true };
+
+    return null;
+  }, [showRoute, filterRep, repMap, routes]);
 
   // Assign color per scoped rep
   const repColors: Record<string, string> = {};
@@ -358,6 +388,7 @@ function MapPageInner() {
             reps={scopedReps}
             value={filterRep}
             colors={repColors}
+            visitRoles={visitRoles}
             onChange={(code) => {
               setFilterRep(code);
               if (code) setShowRoute(true);
@@ -417,6 +448,7 @@ function MapPageInner() {
           repMap={repMap}
           channelMap={channelMap}
           repColors={repColors}
+          visitRoles={visitRoles}
           routeStops={allRouteStops.length > 0 ? allRouteStops : undefined}
           routeLines={routeLines.length > 0 ? routeLines : undefined}
           repHome={repHome}

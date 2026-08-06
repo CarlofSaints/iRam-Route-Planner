@@ -12,6 +12,8 @@ import {
   WeekLabel,
   DayLabel,
   CallCycleStrategy,
+  VisitRole,
+  getVisitRoleName,
 } from "@/lib/types";
 
 interface RouteTypeInfo {
@@ -30,6 +32,7 @@ export default function RoutesPage() {
   const { session, can } = useSession();
   const [routes, setRoutes] = useState<RoutePlanDocument | null>(null);
   const [reps, setReps] = useState<Rep[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [stores, setStores] = useState<Store[]>([]);
   const [gpsEdits, setGpsEdits] = useState<Record<string, { lat: string; lng: string }>>({});
@@ -66,11 +69,13 @@ export default function RoutesPage() {
       fetch("/api/teams").then((r) => r.json()),
       fetch("/api/routes/types").then((r) => r.json()).catch(() => []),
       fetch("/api/stores").then((r) => r.json()).catch(() => []),
-    ]).then(([rt, rp, tm, types, st]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([rt, rp, tm, types, st, vr]) => {
       setRoutes(rt);
       setReps(rp);
       setTeams(tm);
       setStores(Array.isArray(st) ? st : []);
+      setVisitRoles(Array.isArray(vr) ? vr : []);
 
       const typesArr: RouteTypeInfo[] = Array.isArray(types) ? types : [];
       setRouteTypes(typesArr);
@@ -418,7 +423,7 @@ export default function RoutesPage() {
             <option value="">Select Rep</option>
             {filteredReps.map((r) => (
               <option key={r.code} value={r.code}>
-                {r.name} ({r.code})
+                {r.name} ({getVisitRoleName(r.visitRoleId, visitRoles)}) · {r.code}
               </option>
             ))}
           </select>
@@ -521,7 +526,12 @@ export default function RoutesPage() {
               return (
                 <li key={primary} className="flex flex-wrap items-center gap-x-2 gap-y-1">
                   <span className="text-amber-500 font-mono w-6 flex-shrink-0 text-right">{i + 1}.</span>
-                  <span className="font-medium">{currentPlan.repName}</span>
+                  <span className="font-medium">
+                    {currentPlan.repName}{" "}
+                    <span className="font-normal text-amber-700/70">
+                      ({currentPlan.visitRoleName || getVisitRoleName(currentPlan.visitRoleId, visitRoles)})
+                    </span>
+                  </span>
                   <span>—</span>
                   <span>{g.storeName}</span>
                   {g.storeIds.length > 1 && (
