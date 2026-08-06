@@ -67,7 +67,7 @@ export async function generateRepRoute(
 
   // Step 2: For each week, cluster stores into 5 day-groups
   const dayPlans: RouteDayPlan[] = [];
-  const unassigned: { storeId: string; storeName: string; reason: string }[] = [];
+  const unassigned: OverflowCandidate[] = [];
 
   for (const week of WEEKS) {
     const weekStores = weekAssignments.get(week) || [];
@@ -111,10 +111,14 @@ export async function generateRepRoute(
       if (plan.overCapacity) {
         const removed = trimToCapacity(plan, workingMinutes);
         for (const r of removed) {
+          // Carry the whole planned stop, not just its name. It already holds
+          // the store's real coordinates and visit duration, and rebalancing
+          // needs them to put the store back on the map in the right place.
           unassigned.push({
             storeId: r.storeId,
             storeName: r.storeName,
             reason: "Over daily capacity",
+            stop: r,
           });
         }
       }
@@ -593,9 +597,21 @@ function trimToCapacity(
 // Step 4: Overflow Rebalancing
 // ──────────────────────────────────────────────
 
+/**
+ * A store that was trimmed off a day and is waiting to be re-placed. `stop` is
+ * the stop exactly as it was originally planned — it is what carries the real
+ * coordinates and visit duration through the trim/refit round trip.
+ */
+type OverflowCandidate = {
+  storeId: string;
+  storeName: string;
+  reason: string;
+  stop?: RouteStop;
+};
+
 async function rebalanceOverflow(
   dayPlans: RouteDayPlan[],
-  unassigned: { storeId: string; storeName: string; reason: string }[],
+  unassigned: OverflowCandidate[],
   home: { lat: number; lng: number } | null,
   startTime: string,
   workingMinutes: number
@@ -620,37 +636,47 @@ async function rebalanceOverflow(
 
     // Need at least 30 min for a visit + some travel
     if (bestDay && bestRemaining > 45) {
-      // Add store as last stop with estimated travel
-      const lastStop = bestDay.stops[bestDay.stops.length - 1];
-      const estimatedTravel = 15; // rough estimate in minutes
-      const estimatedDist = 10; // rough estimate in km
-      const visitDuration = 30; // default
+      const planned = store.stop;
 
-      if (bestDay.totalTime + estimatedTravel + visitDuration <= workingMinutes) {
-        const currentTime =
-          parseTime(startTime) +
-          bestDay.totalTravelTime +
-          bestDay.totalVisitTime;
+      // Without the original stop there is no way to know where this store IS.
+      // Placing it regardless is what wrote lat/lng 0,0 into saved plans and
+      // drew real stores in the Gulf of Guinea. Leaving it unassigned is
+      // honest — the plan reports it, an invented coordinate does not.
+      if (!planned) continue;
+
+      const lastStop = bestDay.stops[bestDay.stops.length - 1];
+      const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : home;
+      // Real leg from wherever the day currently ends, not a flat 10 km.
+      const distanceKm = from
+        ? haversineKm(from.lat, from.lng, planned.lat, planned.lng)
+        : 0;
+      const travelMin = (distanceKm / DEFAULT_SPEED_KMH) * 60;
+      const visitDuration = planned.visitDuration;
+
+      if (bestDay.totalTime + travelMin + visitDuration <= workingMinutes) {
+        // Arrive after the last stop departs. totalTravelTime includes the
+        // return-home leg, so it can't be used as a clock.
+        const departLast = lastStop
+          ? parseTime(lastStop.departureTime)
+          : parseTime(startTime);
 
         bestDay.stops.push({
-          storeId: store.storeId,
-          storeName: store.storeName,
-          lat: 0,
-          lng: 0,
+          storeId: planned.storeId,
+          storeName: planned.storeName,
+          lat: planned.lat,
+          lng: planned.lng,
           visitDuration,
-          travelTimeFromPrev: estimatedTravel,
-          distanceFromPrev: estimatedDist,
-          arrivalTime: formatTime(currentTime + estimatedTravel),
-          departureTime: formatTime(
-            currentTime + estimatedTravel + visitDuration
-          ),
+          travelTimeFromPrev: Math.round(travelMin * 10) / 10,
+          distanceFromPrev: Math.round(distanceKm * 10) / 10,
+          arrivalTime: formatTime(departLast + travelMin),
+          departureTime: formatTime(departLast + travelMin + visitDuration),
           sequence: bestDay.stops.length + 1,
         });
 
-        bestDay.totalTravelTime += estimatedTravel;
+        bestDay.totalTravelTime += travelMin;
         bestDay.totalVisitTime += visitDuration;
-        bestDay.totalTime += estimatedTravel + visitDuration;
-        bestDay.totalDistance += estimatedDist;
+        bestDay.totalTime += travelMin + visitDuration;
+        bestDay.totalDistance += distanceKm;
         bestDay.overCapacity = bestDay.totalTime > workingMinutes;
 
         fitted.push(i);
@@ -663,7 +689,13 @@ async function rebalanceOverflow(
     stillUnassigned.splice(idx, 1);
   }
 
-  return stillUnassigned;
+  // Drop the carried stop — it exists only to survive the trim/refit round
+  // trip, and the saved plan should not gain a duplicate copy of every stop.
+  return stillUnassigned.map(({ storeId, storeName, reason }) => ({
+    storeId,
+    storeName,
+    reason,
+  }));
 }
 
 // ──────────────────────────────────────────────
