@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useMemo } from "react";
+import { Suspense, useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import dynamic from "next/dynamic";
 import { useSession } from "@/components/SessionProvider";
@@ -18,6 +18,134 @@ interface RouteTypeInfo {
   active: boolean;
   hasRoutes: boolean;
   generatedAt: string | null;
+}
+
+/**
+ * Single-select rep picker with a search box.
+ *
+ * A plain <select> is unusable at 227 reps — the native list has no filtering,
+ * so finding one person means scrolling a wall of names. Matches on name and
+ * code, because reps are identified by code everywhere else in the app.
+ */
+function RepSearchSelect({
+  reps,
+  value,
+  onChange,
+  colors,
+}: {
+  reps: Rep[];
+  value: string;
+  onChange: (code: string) => void;
+  colors: Record<string, string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
+  // Reopening should offer the full list again, not the last search.
+  useEffect(() => {
+    if (!open) setSearch("");
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return reps;
+    return reps.filter(
+      (r) =>
+        r.name.toLowerCase().includes(q) ||
+        r.code.toLowerCase().includes(q) ||
+        (r.email || "").toLowerCase().includes(q)
+    );
+  }, [reps, search]);
+
+  const selected = reps.find((r) => r.code === value);
+
+  const pick = (code: string) => {
+    onChange(code);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((p) => !p)}
+        className="flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-semibold hover:bg-gray-50 focus:outline-none focus:ring-1 focus:ring-iram-green min-w-44"
+        style={{ color: selected ? colors[selected.code] || "#111827" : "#111827" }}
+      >
+        <span className="truncate">{selected ? selected.name : "All Reps"}</span>
+        <svg
+          className={`w-3.5 h-3.5 ml-auto text-gray-400 transition-transform ${open ? "rotate-180" : ""}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+        </svg>
+      </button>
+
+      {open && (
+        <div className="absolute z-[1000] mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg">
+          <div className="p-2 border-b border-gray-100">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setOpen(false);
+                // Type a few letters, hit Enter — the common case is that the
+                // search has already narrowed it to the one person you want.
+                if (e.key === "Enter" && filtered.length > 0) pick(filtered[0].code);
+              }}
+              placeholder="Search rep name or code..."
+              className="w-full border border-gray-200 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-iram-green"
+              autoFocus
+            />
+          </div>
+          <div className="max-h-72 overflow-y-auto p-1">
+            <button
+              onClick={() => pick("")}
+              className={`w-full text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 ${
+                value === "" ? "bg-gray-50 font-semibold" : "text-gray-700"
+              }`}
+            >
+              All Reps
+            </button>
+            {filtered.length === 0 ? (
+              <p className="text-xs text-gray-400 px-2 py-2">
+                No rep matches &ldquo;{search}&rdquo;
+              </p>
+            ) : (
+              filtered.map((r) => (
+                <button
+                  key={r.code}
+                  onClick={() => pick(r.code)}
+                  className={`w-full flex items-center gap-2 text-left px-2 py-1.5 rounded text-sm hover:bg-gray-50 ${
+                    value === r.code ? "bg-gray-50" : ""
+                  }`}
+                >
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: colors[r.code] || "#6B7280" }}
+                  />
+                  <span className="truncate font-medium" style={{ color: colors[r.code] || "#111827" }}>
+                    {r.name}
+                  </span>
+                  <span className="ml-auto text-[10px] text-gray-400 font-mono flex-shrink-0">{r.code}</span>
+                </button>
+              ))
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function MapPageInner() {
@@ -226,22 +354,15 @@ function MapPageInner() {
 
         {/* Rep dropdown — hidden for rep users (auto-selected) */}
         {!isRep && (
-          <select
+          <RepSearchSelect
+            reps={scopedReps}
             value={filterRep}
-            onChange={(e) => {
-              setFilterRep(e.target.value);
-              if (e.target.value) setShowRoute(true);
+            colors={repColors}
+            onChange={(code) => {
+              setFilterRep(code);
+              if (code) setShowRoute(true);
             }}
-            className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-semibold focus:outline-none focus:ring-1 focus:ring-iram-green"
-            style={{ color: filterRep ? repColors[filterRep] || "#111827" : "#111827" }}
-          >
-            <option value="" style={{ color: "#111827" }}>All Reps</option>
-            {scopedReps.map((r) => (
-              <option key={r.code} value={r.code} style={{ color: repColors[r.code], fontWeight: 600 }}>
-                {r.name}
-              </option>
-            ))}
-          </select>
+          />
         )}
 
         <select
