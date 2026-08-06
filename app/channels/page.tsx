@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, Fragment } from "react";
+import { useState, useEffect, useMemo, useRef, Fragment } from "react";
 import {
   Channel,
   VisitRole,
@@ -11,6 +11,26 @@ import {
   DEFAULT_VISIT_ROLES,
 } from "@/lib/types";
 import { resolveRoleDefault } from "@/lib/repStores";
+
+/**
+ * Column widths are user-draggable, so they cannot live in Tailwind classes:
+ * the frozen columns' left offsets are derived from them at render time, and a
+ * hardcoded left-14/left-28 would tear away from the header the moment anything
+ * was resized.
+ */
+const COL_MIN = 60;
+const COL_DEFAULTS: Record<string, number> = {
+  select: 56,
+  num: 56,
+  name: 240,
+  actions: 150,
+};
+const ROLE_FREQ_DEFAULT = 190;
+const ROLE_DUR_DEFAULT = 140;
+const WIDTH_STORAGE_KEY = "channels.columnWidths.v1";
+
+const freqKey = (roleId: string) => `${roleId}:freq`;
+const durKey = (roleId: string) => `${roleId}:dur`;
 
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
@@ -38,6 +58,104 @@ export default function ChannelsPage() {
     byChannel: { name: string; count: number; to: string }[];
   } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  const [colWidths, setColWidths] = useState<Record<string, number>>({});
+
+  // Restore saved widths once on mount. Kept in localStorage rather than on the
+  // channel record because this is a per-person view preference, not data.
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(WIDTH_STORAGE_KEY);
+      if (raw) setColWidths(JSON.parse(raw));
+    } catch {
+      // A corrupt entry just means default widths; never worth failing the page.
+    }
+  }, []);
+
+  const persistWidths = (next: Record<string, number>) => {
+    try {
+      localStorage.setItem(WIDTH_STORAGE_KEY, JSON.stringify(next));
+    } catch {
+      // Private mode / quota — the resize still works for this session.
+    }
+  };
+
+  /** Every leaf column, left to right, with its current width. */
+  const columns = useMemo(() => {
+    const cols: { key: string; width: number }[] = [
+      { key: "select", width: colWidths.select ?? COL_DEFAULTS.select },
+      { key: "num", width: colWidths.num ?? COL_DEFAULTS.num },
+      { key: "name", width: colWidths.name ?? COL_DEFAULTS.name },
+    ];
+    for (const role of visitRoles) {
+      cols.push({ key: freqKey(role.id), width: colWidths[freqKey(role.id)] ?? ROLE_FREQ_DEFAULT });
+      cols.push({ key: durKey(role.id), width: colWidths[durKey(role.id)] ?? ROLE_DUR_DEFAULT });
+    }
+    cols.push({ key: "actions", width: colWidths.actions ?? COL_DEFAULTS.actions });
+    return cols;
+  }, [visitRoles, colWidths]);
+
+  const widthOf = (key: string) => columns.find((c) => c.key === key)?.width ?? COL_MIN;
+
+  // Left offsets for the three frozen columns, derived from live widths.
+  const leftSelect = 0;
+  const leftNum = widthOf("select");
+  const leftName = widthOf("select") + widthOf("num");
+
+  /**
+   * Drag a column edge. Pointer capture keeps the drag alive when the cursor
+   * leaves the 6px grip, which is otherwise very easy to do.
+   */
+  const startResize = (key: string, e: React.PointerEvent<HTMLSpanElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = widthOf(key);
+    const handle = e.currentTarget;
+    handle.setPointerCapture(e.pointerId);
+
+    let latest = startWidth;
+    const onMove = (ev: PointerEvent) => {
+      latest = Math.max(COL_MIN, Math.round(startWidth + (ev.clientX - startX)));
+      setColWidths((prev) => ({ ...prev, [key]: latest }));
+    };
+    const onUp = () => {
+      handle.releasePointerCapture(e.pointerId);
+      handle.removeEventListener("pointermove", onMove);
+      handle.removeEventListener("pointerup", onUp);
+      setColWidths((prev) => {
+        const next = { ...prev, [key]: latest };
+        persistWidths(next);
+        return next;
+      });
+    };
+    handle.addEventListener("pointermove", onMove);
+    handle.addEventListener("pointerup", onUp);
+  };
+
+  /** Double-click a grip to put that column back to its default. */
+  const resetColumn = (key: string) => {
+    setColWidths((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      persistWidths(next);
+      return next;
+    });
+  };
+
+  const resetAllColumns = () => {
+    setColWidths({});
+    persistWidths({});
+  };
+
+  /** The drag grip. Sits on the row-2 header cell but spans both header rows. */
+  const ResizeGrip = ({ colKey }: { colKey: string }) => (
+    <span
+      onPointerDown={(e) => startResize(colKey, e)}
+      onDoubleClick={() => resetColumn(colKey)}
+      title="Drag to resize — double-click to reset"
+      className="absolute -top-11 bottom-0 right-0 w-1.5 cursor-col-resize hover:bg-iram-green/40 active:bg-iram-green z-50"
+    />
+  );
 
   const load = () => {
     Promise.all([
@@ -512,6 +630,16 @@ export default function ChannelsPage() {
           )}
         </div>
 
+        {Object.keys(colWidths).length > 0 && (
+          <button
+            onClick={resetAllColumns}
+            title="Put every column back to its default width"
+            className="text-xs text-gray-500 hover:text-gray-700 px-2 py-1 rounded hover:bg-gray-100 whitespace-nowrap"
+          >
+            Reset column widths
+          </button>
+        )}
+
         {selected.size > 0 && (
           <div className="flex items-center gap-3 sm:ml-auto bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
             <span className="text-sm text-gray-600">{selected.size} selected</span>
@@ -537,10 +665,18 @@ export default function ChannelsPage() {
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <div className="overflow-auto max-h-[calc(100vh-20rem)]">
-          <table className="w-full text-sm border-separate border-spacing-0">
+          <table className="text-sm border-separate border-spacing-0 table-fixed">
+            <colgroup>
+              {columns.map((c) => (
+                <col key={c.key} style={{ width: c.width }} />
+              ))}
+            </colgroup>
             <thead>
               <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wider">
-                <th className="sticky top-0 left-0 z-40 h-11 bg-gray-50 px-3 py-3 w-14 border-b border-gray-200">
+                <th
+                  style={{ left: leftSelect }}
+                  className="sticky top-0 z-40 h-11 bg-gray-50 px-3 py-3 border-b border-gray-200"
+                >
                   <input
                     type="checkbox"
                     checked={allVisibleSelected}
@@ -549,8 +685,18 @@ export default function ChannelsPage() {
                     aria-label="Select all"
                   />
                 </th>
-                <th className="sticky top-0 left-14 z-40 h-11 bg-gray-50 px-3 py-3 w-14 border-b border-gray-200">#</th>
-                <th className="sticky top-0 left-28 z-40 h-11 bg-gray-50 px-6 py-3 min-w-56 border-b border-r border-gray-200">Channel Name</th>
+                <th
+                  style={{ left: leftNum }}
+                  className="sticky top-0 z-40 h-11 bg-gray-50 px-3 py-3 border-b border-gray-200"
+                >
+                  #
+                </th>
+                <th
+                  style={{ left: leftName }}
+                  className="sticky top-0 z-40 h-11 bg-gray-50 px-6 py-3 border-b border-r border-gray-200 truncate"
+                >
+                  Channel Name
+                </th>
                 {visitRoles.map((role) => (
                   <th
                     key={role.id}
@@ -569,16 +715,39 @@ export default function ChannelsPage() {
                 <th className="sticky top-0 z-30 h-11 bg-gray-50 px-6 py-3 text-right border-b border-gray-200">Actions</th>
               </tr>
               <tr className="bg-gray-50 text-left text-[10px] text-gray-400 uppercase tracking-wider">
-                <th className="sticky top-11 left-0 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200" />
-                <th className="sticky top-11 left-14 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200" />
-                <th className="sticky top-11 left-28 z-40 bg-gray-50 px-6 pb-2 border-b border-r border-gray-200" />
+                <th
+                  style={{ left: leftSelect }}
+                  className="sticky top-11 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative"
+                >
+                  <ResizeGrip colKey="select" />
+                </th>
+                <th
+                  style={{ left: leftNum }}
+                  className="sticky top-11 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative"
+                >
+                  <ResizeGrip colKey="num" />
+                </th>
+                <th
+                  style={{ left: leftName }}
+                  className="sticky top-11 z-40 bg-gray-50 px-6 pb-2 border-b border-r border-gray-200 relative"
+                >
+                  <ResizeGrip colKey="name" />
+                </th>
                 {visitRoles.map((role) => (
                   <Fragment key={role.id}>
-                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-l border-b border-gray-200">Frequency</th>
-                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 text-right border-b border-gray-200">Duration</th>
+                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-l border-b border-gray-200 relative">
+                      Frequency
+                      <ResizeGrip colKey={freqKey(role.id)} />
+                    </th>
+                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 text-right border-b border-gray-200 relative">
+                      Duration
+                      <ResizeGrip colKey={durKey(role.id)} />
+                    </th>
                   </Fragment>
                 ))}
-                <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-b border-gray-200" />
+                <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-b border-gray-200 relative">
+                  <ResizeGrip colKey="actions" />
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -588,7 +757,8 @@ export default function ChannelsPage() {
                   className={`group hover:bg-gray-50 ${selected.has(ch.id) ? "bg-red-50/40" : ""}`}
                 >
                   <td
-                    className={`sticky left-0 z-10 px-3 py-3 border-b border-gray-100 ${
+                    style={{ left: leftSelect }}
+                    className={`sticky z-10 px-3 py-3 border-b border-gray-100 ${
                       selected.has(ch.id) ? "bg-red-50" : "bg-white"
                     } group-hover:bg-gray-50`}
                   >
@@ -601,7 +771,8 @@ export default function ChannelsPage() {
                     />
                   </td>
                   <td
-                    className={`sticky left-14 z-10 px-3 py-3 text-gray-400 border-b border-gray-100 ${
+                    style={{ left: leftNum }}
+                    className={`sticky z-10 px-3 py-3 text-gray-400 border-b border-gray-100 ${
                       selected.has(ch.id) ? "bg-red-50" : "bg-white"
                     } group-hover:bg-gray-50`}
                   >
@@ -611,7 +782,8 @@ export default function ChannelsPage() {
                   {editing === ch.id ? (
                     <>
                       <td
-                        className={`sticky left-28 z-10 px-6 py-3 border-b border-r border-gray-200 ${
+                        style={{ left: leftName }}
+                        className={`sticky z-10 px-6 py-3 border-b border-r border-gray-200 ${
                           selected.has(ch.id) ? "bg-red-50" : "bg-white"
                         } group-hover:bg-gray-50`}
                       >
@@ -684,11 +856,13 @@ export default function ChannelsPage() {
                   ) : (
                     <>
                       <td
-                        className={`sticky left-28 z-10 px-6 py-3 font-medium text-gray-900 border-b border-r border-gray-200 ${
+                        style={{ left: leftName }}
+                        className={`sticky z-10 px-6 py-3 font-medium text-gray-900 border-b border-r border-gray-200 ${
                           selected.has(ch.id) ? "bg-red-50" : "bg-white"
                         } group-hover:bg-gray-50`}
+                        title={ch.name}
                       >
-                        {ch.name}
+                        <span className="block truncate">{ch.name}</span>
                       </td>
                       {visitRoles.map((role) => {
                         const eff = effectiveFor(ch, role);
