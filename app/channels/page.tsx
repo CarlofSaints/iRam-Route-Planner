@@ -390,7 +390,7 @@ export default function ChannelsPage() {
                       <th className="px-3 py-2 text-left">Will be set to</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
+                  <tbody>
                     {applyPreview.byChannel.map((c) => (
                       <tr key={c.name}>
                         <td className="px-3 py-1.5 text-gray-700">{c.name}</td>
@@ -536,11 +536,11 @@ export default function ChannelsPage() {
       </div>
 
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
+        <div className="overflow-auto max-h-[calc(100vh-20rem)]">
+          <table className="w-full text-sm border-separate border-spacing-0">
             <thead>
               <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wider">
-                <th className="px-6 py-3 w-8">
+                <th className="sticky top-0 left-0 z-40 h-11 bg-gray-50 px-3 py-3 w-14 border-b border-gray-200">
                   <input
                     type="checkbox"
                     checked={allVisibleSelected}
@@ -549,13 +549,13 @@ export default function ChannelsPage() {
                     aria-label="Select all"
                   />
                 </th>
-                <th className="px-6 py-3 w-8">#</th>
-                <th className="px-6 py-3">Channel Name</th>
+                <th className="sticky top-0 left-14 z-40 h-11 bg-gray-50 px-3 py-3 w-14 border-b border-gray-200">#</th>
+                <th className="sticky top-0 left-28 z-40 h-11 bg-gray-50 px-6 py-3 min-w-56 border-b border-r border-gray-200">Channel Name</th>
                 {visitRoles.map((role) => (
                   <th
                     key={role.id}
                     colSpan={2}
-                    className="px-6 py-3 text-center border-l border-gray-200"
+                    className="sticky top-0 z-30 h-11 bg-gray-50 px-6 py-3 text-center border-l border-b border-gray-200"
                     title={
                       role.isPrimary
                         ? "The sales rep's call cycle. These values are copied onto every store in the channel."
@@ -566,25 +566,32 @@ export default function ChannelsPage() {
                     {role.isPrimary && <span className="ml-1 text-gray-400 normal-case">(primary)</span>}
                   </th>
                 ))}
-                <th className="px-6 py-3 text-right">Actions</th>
+                <th className="sticky top-0 z-30 h-11 bg-gray-50 px-6 py-3 text-right border-b border-gray-200">Actions</th>
               </tr>
               <tr className="bg-gray-50 text-left text-[10px] text-gray-400 uppercase tracking-wider">
-                <th className="px-6 pb-2" />
-                <th className="px-6 pb-2" />
-                <th className="px-6 pb-2" />
+                <th className="sticky top-11 left-0 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200" />
+                <th className="sticky top-11 left-14 z-40 bg-gray-50 px-3 pb-2 border-b border-gray-200" />
+                <th className="sticky top-11 left-28 z-40 bg-gray-50 px-6 pb-2 border-b border-r border-gray-200" />
                 {visitRoles.map((role) => (
                   <Fragment key={role.id}>
-                    <th className="px-6 pb-2 border-l border-gray-200">Frequency</th>
-                    <th className="px-6 pb-2 text-right">Duration</th>
+                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-l border-b border-gray-200">Frequency</th>
+                    <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 text-right border-b border-gray-200">Duration</th>
                   </Fragment>
                 ))}
-                <th className="px-6 pb-2" />
+                <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-b border-gray-200" />
               </tr>
             </thead>
-            <tbody className="divide-y divide-gray-100">
+            <tbody>
               {filtered.map((ch, i) => (
-                <tr key={ch.id} className={`hover:bg-gray-50 ${selected.has(ch.id) ? "bg-red-50/40" : ""}`}>
-                  <td className="px-6 py-3">
+                <tr
+                  key={ch.id}
+                  className={`group hover:bg-gray-50 ${selected.has(ch.id) ? "bg-red-50/40" : ""}`}
+                >
+                  <td
+                    className={`sticky left-0 z-10 px-3 py-3 border-b border-gray-100 ${
+                      selected.has(ch.id) ? "bg-red-50" : "bg-white"
+                    } group-hover:bg-gray-50`}
+                  >
                     <input
                       type="checkbox"
                       checked={selected.has(ch.id)}
@@ -593,11 +600,21 @@ export default function ChannelsPage() {
                       aria-label={`Select ${ch.name}`}
                     />
                   </td>
-                  <td className="px-6 py-3 text-gray-400">{i + 1}</td>
+                  <td
+                    className={`sticky left-14 z-10 px-3 py-3 text-gray-400 border-b border-gray-100 ${
+                      selected.has(ch.id) ? "bg-red-50" : "bg-white"
+                    } group-hover:bg-gray-50`}
+                  >
+                    {i + 1}
+                  </td>
 
                   {editing === ch.id ? (
                     <>
-                      <td className="px-6 py-3">
+                      <td
+                        className={`sticky left-28 z-10 px-6 py-3 border-b border-r border-gray-200 ${
+                          selected.has(ch.id) ? "bg-red-50" : "bg-white"
+                        } group-hover:bg-gray-50`}
+                      >
                         <input
                           value={editData.name || ""}
                           onChange={(e) => setEditData({ ...editData, name: e.target.value })}
@@ -609,7 +626,7 @@ export default function ChannelsPage() {
                         const isSet = role.isPrimary || !!editData.roleDefaults?.[role.id];
                         return (
                           <Fragment key={role.id}>
-                            <td className="px-6 py-3 border-l border-gray-200">
+                            <td className="px-6 py-3 border-l border-b border-gray-200">
                               <select
                                 value={eff.frequency}
                                 onChange={(e) => setRoleField(role, "frequency", e.target.value as FrequencyType)}
@@ -624,7 +641,7 @@ export default function ChannelsPage() {
                                 ))}
                               </select>
                             </td>
-                            <td className="px-6 py-3">
+                            <td className="px-6 py-3 border-b border-gray-100">
                               <div className="flex items-center justify-end gap-1">
                                 <input
                                   type="number"
@@ -648,7 +665,7 @@ export default function ChannelsPage() {
                           </Fragment>
                         );
                       })}
-                      <td className="px-6 py-3 text-right space-x-2">
+                      <td className="px-6 py-3 text-right space-x-2 border-b border-gray-100">
                         <button
                           onClick={() => saveEdit(ch.id)}
                           disabled={saving}
@@ -666,7 +683,13 @@ export default function ChannelsPage() {
                     </>
                   ) : (
                     <>
-                      <td className="px-6 py-3 font-medium text-gray-900">{ch.name}</td>
+                      <td
+                        className={`sticky left-28 z-10 px-6 py-3 font-medium text-gray-900 border-b border-r border-gray-200 ${
+                          selected.has(ch.id) ? "bg-red-50" : "bg-white"
+                        } group-hover:bg-gray-50`}
+                      >
+                        {ch.name}
+                      </td>
                       {visitRoles.map((role) => {
                         const eff = effectiveFor(ch, role);
                         const isSet = role.isPrimary || !!ch.roleDefaults?.[role.id];
@@ -675,7 +698,7 @@ export default function ChannelsPage() {
                           : `Not set for this channel — falls back to the ${role.name} role's own default`;
                         return (
                           <Fragment key={role.id}>
-                            <td className="px-6 py-3 border-l border-gray-200" title={why}>
+                            <td className="px-6 py-3 border-l border-b border-gray-200" title={why}>
                               <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
                                   isSet ? "bg-blue-50 text-blue-700" : "bg-gray-50 text-gray-400 italic"
@@ -685,7 +708,7 @@ export default function ChannelsPage() {
                               </span>
                             </td>
                             <td
-                              className={`px-6 py-3 text-right ${isSet ? "text-gray-600" : "text-gray-400 italic"}`}
+                              className={`px-6 py-3 text-right border-b border-gray-100 ${isSet ? "text-gray-600" : "text-gray-400 italic"}`}
                               title={why}
                             >
                               {eff.duration} min
@@ -693,7 +716,7 @@ export default function ChannelsPage() {
                           </Fragment>
                         );
                       })}
-                      <td className="px-6 py-3 text-right space-x-3">
+                      <td className="px-6 py-3 text-right space-x-3 border-b border-gray-100">
                         <button
                           onClick={() => startEdit(ch)}
                           className="text-iram-green hover:text-red-800 text-xs font-medium"
