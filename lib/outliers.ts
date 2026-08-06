@@ -1,4 +1,4 @@
-import { Rep, Store, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
+import { Rep, Store, Channel, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
 import { parseLatLng, haversineKm, medianCenter } from "./route-engine";
 import { getStoresForRep, getRoleForRep } from "./repStores";
 
@@ -31,7 +31,8 @@ export function computeOutliers(
   reps: Rep[],
   stores: Store[],
   radiusKm: number,
-  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES
+  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES,
+  channels: Channel[] = []
 ): OutlierResult {
   const out: OutlierStore[] = [];
   const perRep: Record<string, number> = {};
@@ -40,7 +41,7 @@ export function computeOutliers(
     const role = getRoleForRep(rep, visitRoles);
     if (!role.checkOutliers) continue;
 
-    const repStores = getStoresForRep(rep, stores, role);
+    const repStores = getStoresForRep(rep, stores, role, null, channels);
     const center = medianCenter(repStores);
     if (!center) continue;
 

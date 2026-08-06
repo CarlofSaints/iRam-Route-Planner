@@ -1,4 +1,4 @@
-import { Rep, Store, RoutePlanDocument, VisitRole, DEFAULT_VISIT_ROLES, getMonthlyRate } from "./types";
+import { Rep, Store, Channel, RoutePlanDocument, VisitRole, DEFAULT_VISIT_ROLES, getMonthlyRate } from "./types";
 import { getStoresForRep, getRoleForRep } from "./repStores";
 
 // A generated route document covers one 4-week cycle = one month.
@@ -38,7 +38,8 @@ export function computeCapacity(
   reps: Rep[],
   stores: Store[],
   doc: RoutePlanDocument | null,
-  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES
+  visitRoles: VisitRole[] = DEFAULT_VISIT_ROLES,
+  channels: Channel[] = []
 ): CapacityResult {
   const planByRep = new Map((doc?.repPlans ?? []).map((p) => [p.repCode, p]));
 
@@ -46,7 +47,7 @@ export function computeCapacity(
     // Same helper the route generator uses, so a QC rep's utilisation is
     // measured against the QC stores and rhythm their route was built from.
     const role = getRoleForRep(rep, visitRoles);
-    const allocated = getStoresForRep(rep, stores, role);
+    const allocated = getStoresForRep(rep, stores, role, null, channels);
     const callsPerMonth = allocated.reduce(
       (sum, s) => sum + getMonthlyRate(s.frequency || "monthly"),
       0

@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getReps, getStores, getRoutes, getTeams, getVisitRoles } from "@/lib/data";
+import { getReps, getStores, getRoutes, getTeams, getVisitRoles, getChannels } from "@/lib/data";
 import { computeCapacity } from "@/lib/capacity";
 import { requireSession } from "@/lib/auth";
 import XLSX from "xlsx";
@@ -8,15 +8,16 @@ export async function GET() {
   try {
     await requireSession();
 
-    const [reps, stores, doc, teams, visitRoles] = await Promise.all([
+    const [reps, stores, doc, teams, visitRoles, channels] = await Promise.all([
       getReps(),
       getStores(),
       getRoutes(),
       getTeams(),
       getVisitRoles(),
+      getChannels(),
     ]);
 
-    const result = computeCapacity(reps, stores, doc, visitRoles);
+    const result = computeCapacity(reps, stores, doc, visitRoles, channels);
     const teamName = new Map(teams.map((t) => [t.id, t.name || t.managerName || ""]));
 
     const rows: (string | number)[][] = [

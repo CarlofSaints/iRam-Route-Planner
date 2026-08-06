@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
     const parsed = param != null ? Number(param) : NaN;
     const radiusKm = !isNaN(parsed) && parsed > 0 ? Math.round(parsed) : settings.outlierRadiusKm;
 
-    const result = computeOutliers(reps, stores, radiusKm, visitRoles);
+    const result = computeOutliers(reps, stores, radiusKm, visitRoles, channels);
     const channelName = new Map(channels.map((c) => [c.id, c.name]));
     const storeById = new Map(stores.map((s) => [s.id, s]));
 

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, saveRoutes, saveRoutesForType, getCallCycleTypes, getSettings, getVisitRoles } from "@/lib/data";
+import { getReps, getStores, saveRoutes, saveRoutesForType, getCallCycleTypes, getSettings, getVisitRoles, getChannels } from "@/lib/data";
 import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
 import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
@@ -22,12 +22,13 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const repCodes: string[] | undefined = body.repCodes;
 
-    const [allReps, allStores, callCycleTypes, settings, visitRoles] = await Promise.all([
+    const [allReps, allStores, callCycleTypes, settings, visitRoles, allChannels] = await Promise.all([
       getReps(),
       getStores(),
       getCallCycleTypes(),
       getSettings(),
       getVisitRoles(),
+      getChannels(),
     ]);
     const outlierRadiusKm = settings.outlierRadiusKm;
 
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
       // Stores for this rep: their visit role decides whether that means the
       // stores they are primary on, or the ones they QC/train at.
       const role = getRoleForRep(rep, visitRoles);
-      const repStores = getStoresForRep(rep, allStores, role, strategy);
+      const repStores = getStoresForRep(rep, allStores, role, strategy, allChannels);
       if (repStores.length === 0) {
         repPlans.push({
           repCode: rep.code,

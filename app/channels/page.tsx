@@ -1,10 +1,20 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Channel, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel } from "@/lib/types";
+import { useState, useEffect, useRef, Fragment } from "react";
+import {
+  Channel,
+  VisitRole,
+  ChannelRoleDefault,
+  FREQUENCY_OPTIONS,
+  FrequencyType,
+  getFrequencyLabel,
+  DEFAULT_VISIT_ROLES,
+} from "@/lib/types";
+import { resolveRoleDefault } from "@/lib/repStores";
 
 export default function ChannelsPage() {
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>(DEFAULT_VISIT_ROLES);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Channel>>({});
@@ -30,19 +40,77 @@ export default function ChannelsPage() {
   const fileRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
-    fetch("/api/channels")
-      .then((r) => r.json())
-      .then((data) => {
-        setChannels(data);
-        setLoading(false);
-      });
+    Promise.all([
+      fetch("/api/channels").then((r) => r.json()).catch(() => []),
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([chs, roles]) => {
+      setChannels(Array.isArray(chs) ? chs : []);
+      // The primary role has to come first — it is the column that maps to the
+      // channel's own frequency/duration, and the one everything else defers to.
+      const list: VisitRole[] = Array.isArray(roles) && roles.length ? roles : DEFAULT_VISIT_ROLES;
+      setVisitRoles([...list].sort((a, b) => Number(b.isPrimary) - Number(a.isPrimary)));
+      setLoading(false);
+    });
   };
 
   useEffect(() => { load(); }, []);
 
+  /**
+   * What a role actually calls at on this channel — the value the route engine
+   * will use, whether it was set here or inherited from the role.
+   */
+  const effectiveFor = (ch: Channel, role: VisitRole): ChannelRoleDefault =>
+    resolveRoleDefault(ch, role);
+
+  /**
+   * Edit one cell. The primary role writes to the channel's own
+   * frequency/duration (there is deliberately no second copy of those); every
+   * other role writes into roleDefaults under its own id.
+   */
+  const setRoleField = (
+    role: VisitRole,
+    field: "frequency" | "duration",
+    value: FrequencyType | number
+  ) => {
+    if (role.isPrimary) {
+      setEditData((prev) => ({ ...prev, [field]: value }));
+      return;
+    }
+    setEditData((prev) => {
+      const current =
+        prev.roleDefaults?.[role.id] ??
+        // First edit of an unset role starts from what it inherits, so changing
+        // only the duration cannot silently reset the frequency to something else.
+        { frequency: role.frequency, duration: role.duration };
+      return {
+        ...prev,
+        roleDefaults: {
+          ...(prev.roleDefaults ?? {}),
+          [role.id]: { ...current, [field]: value },
+        },
+      };
+    });
+  };
+
+  /** Drop a role's override so it goes back to inheriting. */
+  const clearRole = (role: VisitRole) => {
+    setEditData((prev) => {
+      const next = { ...(prev.roleDefaults ?? {}) };
+      delete next[role.id];
+      return { ...prev, roleDefaults: next };
+    });
+  };
+
   const startEdit = (ch: Channel) => {
     setEditing(ch.id);
-    setEditData({ name: ch.name, frequency: ch.frequency, duration: ch.duration });
+    // Clone roleDefaults — editing must not mutate the loaded channel in place,
+    // or cancelling an edit would silently keep the change.
+    setEditData({
+      name: ch.name,
+      frequency: ch.frequency,
+      duration: ch.duration,
+      roleDefaults: JSON.parse(JSON.stringify(ch.roleDefaults ?? {})),
+    });
   };
 
   const cancelEdit = () => {
@@ -483,9 +551,34 @@ export default function ChannelsPage() {
                 </th>
                 <th className="px-6 py-3 w-8">#</th>
                 <th className="px-6 py-3">Channel Name</th>
-                <th className="px-6 py-3">Default Frequency</th>
-                <th className="px-6 py-3 text-right">Duration (min)</th>
+                {visitRoles.map((role) => (
+                  <th
+                    key={role.id}
+                    colSpan={2}
+                    className="px-6 py-3 text-center border-l border-gray-200"
+                    title={
+                      role.isPrimary
+                        ? "The sales rep's call cycle. These values are copied onto every store in the channel."
+                        : `How ${role.name} calls on this channel. Blank = this role's own default of ${getFrequencyLabel(role.frequency)} / ${role.duration} min.`
+                    }
+                  >
+                    {role.name}
+                    {role.isPrimary && <span className="ml-1 text-gray-400 normal-case">(primary)</span>}
+                  </th>
+                ))}
                 <th className="px-6 py-3 text-right">Actions</th>
+              </tr>
+              <tr className="bg-gray-50 text-left text-[10px] text-gray-400 uppercase tracking-wider">
+                <th className="px-6 pb-2" />
+                <th className="px-6 pb-2" />
+                <th className="px-6 pb-2" />
+                {visitRoles.map((role) => (
+                  <Fragment key={role.id}>
+                    <th className="px-6 pb-2 border-l border-gray-200">Frequency</th>
+                    <th className="px-6 pb-2 text-right">Duration</th>
+                  </Fragment>
+                ))}
+                <th className="px-6 pb-2" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -511,27 +604,50 @@ export default function ChannelsPage() {
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
                       </td>
-                      <td className="px-6 py-3">
-                        <select
-                          value={editData.frequency || "monthly"}
-                          onChange={(e) => setEditData({ ...editData, frequency: e.target.value as FrequencyType })}
-                          className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
-                        >
-                          {FREQUENCY_OPTIONS.map((f) => (
-                            <option key={f.value} value={f.value}>
-                              {f.label}
-                            </option>
-                          ))}
-                        </select>
-                      </td>
-                      <td className="px-6 py-3">
-                        <input
-                          type="number"
-                          value={editData.duration ?? 30}
-                          onChange={(e) => setEditData({ ...editData, duration: Number(e.target.value) })}
-                          className="border border-gray-200 rounded px-2 py-1 text-sm w-20 text-right focus:outline-none focus:ring-1 focus:ring-iram-green"
-                        />
-                      </td>
+                      {visitRoles.map((role) => {
+                        const eff = effectiveFor(editData as Channel, role);
+                        const isSet = role.isPrimary || !!editData.roleDefaults?.[role.id];
+                        return (
+                          <Fragment key={role.id}>
+                            <td className="px-6 py-3 border-l border-gray-200">
+                              <select
+                                value={eff.frequency}
+                                onChange={(e) => setRoleField(role, "frequency", e.target.value as FrequencyType)}
+                                className={`border rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green ${
+                                  isSet ? "border-gray-200" : "border-gray-200 text-gray-400 italic"
+                                }`}
+                              >
+                                {FREQUENCY_OPTIONS.map((f) => (
+                                  <option key={f.value} value={f.value}>
+                                    {f.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </td>
+                            <td className="px-6 py-3">
+                              <div className="flex items-center justify-end gap-1">
+                                <input
+                                  type="number"
+                                  value={eff.duration}
+                                  onChange={(e) => setRoleField(role, "duration", Number(e.target.value))}
+                                  className={`border rounded px-2 py-1 text-sm w-20 text-right focus:outline-none focus:ring-1 focus:ring-iram-green ${
+                                    isSet ? "border-gray-200" : "border-gray-200 text-gray-400 italic"
+                                  }`}
+                                />
+                                {!role.isPrimary && isSet && (
+                                  <button
+                                    onClick={() => clearRole(role)}
+                                    title={`Clear — fall back to the ${role.name} role's own default`}
+                                    className="text-gray-300 hover:text-red-500 text-xs px-1"
+                                  >
+                                    ×
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </Fragment>
+                        );
+                      })}
                       <td className="px-6 py-3 text-right space-x-2">
                         <button
                           onClick={() => saveEdit(ch.id)}
@@ -551,12 +667,32 @@ export default function ChannelsPage() {
                   ) : (
                     <>
                       <td className="px-6 py-3 font-medium text-gray-900">{ch.name}</td>
-                      <td className="px-6 py-3 text-gray-600">
-                        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
-                          {getFrequencyLabel(ch.frequency)}
-                        </span>
-                      </td>
-                      <td className="px-6 py-3 text-right text-gray-600">{ch.duration} min</td>
+                      {visitRoles.map((role) => {
+                        const eff = effectiveFor(ch, role);
+                        const isSet = role.isPrimary || !!ch.roleDefaults?.[role.id];
+                        const why = isSet
+                          ? ""
+                          : `Not set for this channel — falls back to the ${role.name} role's own default`;
+                        return (
+                          <Fragment key={role.id}>
+                            <td className="px-6 py-3 border-l border-gray-200" title={why}>
+                              <span
+                                className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
+                                  isSet ? "bg-blue-50 text-blue-700" : "bg-gray-50 text-gray-400 italic"
+                                }`}
+                              >
+                                {getFrequencyLabel(eff.frequency)}
+                              </span>
+                            </td>
+                            <td
+                              className={`px-6 py-3 text-right ${isSet ? "text-gray-600" : "text-gray-400 italic"}`}
+                              title={why}
+                            >
+                              {eff.duration} min
+                            </td>
+                          </Fragment>
+                        );
+                      })}
                       <td className="px-6 py-3 text-right space-x-3">
                         <button
                           onClick={() => startEdit(ch)}
@@ -577,7 +713,7 @@ export default function ChannelsPage() {
               ))}
               {filtered.length === 0 && (
                 <tr>
-                  <td colSpan={6} className="px-6 py-8 text-center text-gray-400">
+                  <td colSpan={4 + visitRoles.length * 2} className="px-6 py-8 text-center text-gray-400">
                     {channels.length === 0
                       ? 'No channels configured. Click "Add Channel" to create one.'
                       : `No channels match "${search}".`}

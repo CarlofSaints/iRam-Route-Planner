@@ -1,8 +1,29 @@
+/** One visit role's call rhythm on one channel. */
+export interface ChannelRoleDefault {
+  frequency: FrequencyType;
+  duration: number; // minutes per visit
+}
+
 export interface Channel {
   id: string;
   name: string;
+  /**
+   * The PRIMARY role's defaults. These stay top-level rather than moving into
+   * `roleDefaults` because they are what gets materialised onto every store —
+   * the route engine only ever reads `store.frequency`/`store.duration`. Keeping
+   * one home for them avoids two sources of truth for the same number.
+   */
   frequency: FrequencyType;
   duration: number; // minutes per visit
+  /**
+   * Per-role defaults for NON-primary roles, keyed by VisitRole.id.
+   *
+   * A QC call on a Makro is not the same length as a QC call on a Mica, so the
+   * role's own frequency/duration is only a fallback. An absent entry means
+   * exactly that fallback, which is how QC and Training behaved before this
+   * existed — so no migration is needed.
+   */
+  roleDefaults?: Record<string, ChannelRoleDefault>;
 }
 
 export type FrequencyType =

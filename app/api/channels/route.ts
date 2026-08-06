@@ -17,7 +17,7 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, name, frequency, duration } = body as Partial<Channel> & { id: string };
+    const { id, name, frequency, duration, roleDefaults } = body as Partial<Channel> & { id: string };
 
     const channels = await getChannels();
     const idx = channels.findIndex((c) => c.id === id);
@@ -30,6 +30,12 @@ export async function PUT(request: NextRequest) {
     if (name) channels[idx].name = name;
     if (frequency) channels[idx].frequency = frequency as FrequencyType;
     if (duration !== undefined) channels[idx].duration = duration;
+
+    // Per-role defaults for QC/Training. These are NOT materialised onto stores
+    // the way the primary role's are — lib/repStores.ts substitutes them when it
+    // builds a non-primary rep's store list, so a change takes effect on the
+    // next route generation with no cascade needed.
+    if (roleDefaults !== undefined) channels[idx].roleDefaults = roleDefaults;
 
     await saveChannels(channels);
 
