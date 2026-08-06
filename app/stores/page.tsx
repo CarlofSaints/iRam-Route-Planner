@@ -6,6 +6,47 @@ import { Store, Channel, Rep, Team, FREQUENCY_OPTIONS, FrequencyType, getFrequen
 const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WEEKS = ["", "Wk1", "Wk2", "Wk3", "Wk4", "Wk5"];
 
+/**
+ * South Africa's bounding box. Used only to WARN — a coordinate outside it is
+ * still saved and still shown, it just gets flagged so a store sitting in the
+ * ocean is visible in the grid instead of only on the map.
+ */
+const SA_BOUNDS = { latMin: -35.0, latMax: -22.0, lngMin: 16.0, lngMax: 33.0 };
+
+type CoordCheck = { lat: number; lng: number; ok: boolean; problem: string };
+
+/**
+ * Coordinates are stored as free text (they arrive that way from the upload),
+ * so this is the one place that decides whether a pair is usable.
+ */
+function checkCoords(rawLat: string | undefined, rawLng: string | undefined): CoordCheck {
+  const latStr = (rawLat ?? "").trim();
+  const lngStr = (rawLng ?? "").trim();
+  const lat = parseFloat(latStr);
+  const lng = parseFloat(lngStr);
+
+  if (!latStr || !lngStr)
+    return { lat, lng, ok: false, problem: "No coordinates on this store" };
+  if (Number.isNaN(lat) || Number.isNaN(lng))
+    return { lat, lng, ok: false, problem: "Not a number — check for stray text or a comma decimal point" };
+  if (lat === 0 && lng === 0)
+    return { lat, lng, ok: false, problem: "0, 0 — this plots in the Atlantic Ocean off West Africa" };
+  // SA latitude is negative and longitude positive; the reverse means the two
+  // columns were transposed somewhere, which lands the pin in the Atlantic.
+  if (lat >= SA_BOUNDS.lngMin && lat <= SA_BOUNDS.lngMax && lng >= SA_BOUNDS.latMin && lng <= SA_BOUNDS.latMax)
+    return { lat, lng, ok: false, problem: "Latitude and longitude look swapped" };
+  if (lat > 0)
+    return { lat, lng, ok: false, problem: "Latitude is positive — South Africa is negative, the minus sign is missing" };
+  if (lat < SA_BOUNDS.latMin || lat > SA_BOUNDS.latMax || lng < SA_BOUNDS.lngMin || lng > SA_BOUNDS.lngMax)
+    return { lat, lng, ok: false, problem: "Outside South Africa" };
+
+  return { lat, lng, ok: true, problem: "" };
+}
+
+/** Google Maps pin at an exact coordinate — not a name search, so what you see is what is stored. */
+const googleMapsUrl = (lat: number, lng: number) =>
+  `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+
 /* ─── Multi-select checkbox dropdown with search ─── */
 function FilterDropdown({
   label,
@@ -124,6 +165,7 @@ export default function StoresPage() {
   const [filterProvinces, setFilterProvinces] = useState<Set<string>>(new Set());
   const [filterRegions, setFilterRegions] = useState<Set<string>>(new Set());
   const [filterFrequencies, setFilterFrequencies] = useState<Set<string>>(new Set());
+  const [onlyBadCoords, setOnlyBadCoords] = useState(false);
   const [editing, setEditing] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<Store>>({});
   const [saving, setSaving] = useState(false);
@@ -251,11 +293,17 @@ export default function StoresPage() {
         if (reg && !filterRegions.has(reg)) return false;
       }
       if (filterFrequencies.size > 0 && !filterFrequencies.has(s.frequency)) return false;
+      if (onlyBadCoords && checkCoords(s.gpsLat, s.gpsLng).ok) return false;
       return true;
     });
-  }, [stores, search, filterChannels, filterReps, filterTeamManagers, filterProvinces, filterRegions, filterFrequencies, repTeamMap]);
+  }, [stores, search, filterChannels, filterReps, filterTeamManagers, filterProvinces, filterRegions, filterFrequencies, onlyBadCoords, repTeamMap]);
 
-  const hasFilters = !!search || filterChannels.size > 0 || filterReps.size > 0 || filterTeamManagers.size > 0 || filterProvinces.size > 0 || filterRegions.size > 0 || filterFrequencies.size > 0;
+  const badCoordCount = useMemo(
+    () => stores.filter((s) => !checkCoords(s.gpsLat, s.gpsLng).ok).length,
+    [stores]
+  );
+
+  const hasFilters = !!search || filterChannels.size > 0 || filterReps.size > 0 || filterTeamManagers.size > 0 || filterProvinces.size > 0 || filterRegions.size > 0 || filterFrequencies.size > 0 || onlyBadCoords;
 
   const clearAllFilters = () => {
     setSearch("");
@@ -265,6 +313,7 @@ export default function StoresPage() {
     setFilterProvinces(new Set());
     setFilterRegions(new Set());
     setFilterFrequencies(new Set());
+    setOnlyBadCoords(false);
   };
 
   const startEdit = (store: Store) => {
@@ -278,6 +327,8 @@ export default function StoresPage() {
       weekNumber: store.weekNumber,
       province: store.province || "",
       region: store.region || "",
+      gpsLat: store.gpsLat || "",
+      gpsLng: store.gpsLng || "",
     });
   };
 
@@ -360,6 +411,24 @@ export default function StoresPage() {
           selected={filterFrequencies}
           onChange={setFilterFrequencies}
         />
+        <button
+          onClick={() => setOnlyBadCoords((p) => !p)}
+          title="Blank, unparseable, swapped, or outside South Africa"
+          className={`flex items-center gap-1.5 border rounded-lg px-3 py-2 text-sm ${
+            onlyBadCoords
+              ? "border-amber-500 bg-amber-50 text-amber-800 font-medium"
+              : "border-gray-200 text-gray-700 hover:bg-gray-50"
+          }`}
+        >
+          GPS problems
+          <span
+            className={`inline-flex items-center justify-center min-w-5 h-5 px-1 rounded-full text-[10px] font-bold ${
+              badCoordCount > 0 ? "bg-amber-500 text-white" : "bg-gray-200 text-gray-500"
+            }`}
+          >
+            {badCoordCount}
+          </span>
+        </button>
         {hasFilters && (
           <button
             onClick={clearAllFilters}
@@ -395,25 +464,30 @@ export default function StoresPage() {
 
       {/* Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* The header is sticky against THIS container, so it needs its own
+            scroll and a bounded height — otherwise the page scrolls instead and
+            the header leaves with it. */}
+        <div className="overflow-auto max-h-[calc(100vh-22rem)]">
           <table className="w-full text-xs">
-            <thead>
-              <tr className="bg-gray-50 text-left text-[10px] text-gray-500 uppercase tracking-wider">
-                <th className="px-3 py-2">Place ID</th>
-                <th className="px-3 py-2">Store Name</th>
-                <th className="px-3 py-2">Channel</th>
-                <th className="px-3 py-2">Province</th>
-                <th className="px-3 py-2">Region</th>
-                <th className="px-3 py-2">Rep</th>
-                <th className="px-3 py-2 text-right">Monthly Sales</th>
-                <th className="px-3 py-2 text-center">Rank Overall</th>
-                <th className="px-3 py-2 text-center">Rank/Rep</th>
-                <th className="px-3 py-2 text-center">Rank/Channel</th>
-                <th className="px-3 py-2">Frequency</th>
-                <th className="px-3 py-2 text-right">Duration</th>
-                <th className="px-3 py-2">Day</th>
-                <th className="px-3 py-2">Week</th>
-                <th className="px-3 py-2 text-right">Actions</th>
+            <thead className="sticky top-0 z-20">
+              <tr className="bg-gray-50 text-left text-[10px] text-gray-500 uppercase tracking-wider shadow-[inset_0_-1px_0_0_rgb(229,231,235)]">
+                <th className="px-3 py-2 bg-gray-50">Place ID</th>
+                <th className="px-3 py-2 bg-gray-50">Store Name</th>
+                <th className="px-3 py-2 bg-gray-50">Channel</th>
+                <th className="px-3 py-2 bg-gray-50">Province</th>
+                <th className="px-3 py-2 bg-gray-50">Region</th>
+                <th className="px-3 py-2 bg-gray-50">Latitude</th>
+                <th className="px-3 py-2 bg-gray-50">Longitude</th>
+                <th className="px-3 py-2 bg-gray-50">Rep</th>
+                <th className="px-3 py-2 bg-gray-50 text-right">Monthly Sales</th>
+                <th className="px-3 py-2 bg-gray-50 text-center">Rank Overall</th>
+                <th className="px-3 py-2 bg-gray-50 text-center">Rank/Rep</th>
+                <th className="px-3 py-2 bg-gray-50 text-center">Rank/Channel</th>
+                <th className="px-3 py-2 bg-gray-50">Frequency</th>
+                <th className="px-3 py-2 bg-gray-50 text-right">Duration</th>
+                <th className="px-3 py-2 bg-gray-50">Day</th>
+                <th className="px-3 py-2 bg-gray-50">Week</th>
+                <th className="px-3 py-2 bg-gray-50 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
@@ -421,6 +495,15 @@ export default function StoresPage() {
                 const isEditing = editing === store.id;
                 const ch = channelMap.get(store.channelId);
                 const rep = repMap.get(store.repCode);
+                const coords = checkCoords(store.gpsLat, store.gpsLng);
+                // While editing, check-on-map follows what has been TYPED, not
+                // what is saved — that is the point of it, to test a correction
+                // before committing it.
+                const editCoords = isEditing
+                  ? checkCoords(editData.gpsLat, editData.gpsLng)
+                  : coords;
+                const shown = isEditing ? editCoords : coords;
+                const mappable = !Number.isNaN(shown.lat) && !Number.isNaN(shown.lng);
                 return (
                   <tr key={store.id} className="hover:bg-gray-50">
                     <td className="px-3 py-2 font-mono text-gray-500">{store.placeId}</td>
@@ -464,6 +547,26 @@ export default function StoresPage() {
                               <option key={r.id} value={r.name}>{r.name}</option>
                             ))}
                           </select>
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            value={editData.gpsLat ?? ""}
+                            onChange={(e) => setEditData({ ...editData, gpsLat: e.target.value })}
+                            placeholder="-26.0597"
+                            className={`border rounded px-1 py-0.5 text-xs w-24 font-mono ${
+                              editCoords.ok ? "border-gray-200" : "border-amber-400 bg-amber-50"
+                            }`}
+                          />
+                        </td>
+                        <td className="px-3 py-2">
+                          <input
+                            value={editData.gpsLng ?? ""}
+                            onChange={(e) => setEditData({ ...editData, gpsLng: e.target.value })}
+                            placeholder="28.0920"
+                            className={`border rounded px-1 py-0.5 text-xs w-24 font-mono ${
+                              editCoords.ok ? "border-gray-200" : "border-amber-400 bg-amber-50"
+                            }`}
+                          />
                         </td>
                         <td className="px-3 py-2">
                           <select
@@ -521,7 +624,20 @@ export default function StoresPage() {
                             ))}
                           </select>
                         </td>
-                        <td className="px-3 py-2 text-right space-x-1 whitespace-nowrap">
+                        <td className="px-3 py-2 text-right space-x-2 whitespace-nowrap">
+                          {mappable ? (
+                            <a
+                              href={googleMapsUrl(shown.lat, shown.lng)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open these coordinates in Google Maps (unsaved edits included)"
+                              className="text-blue-600 hover:text-blue-800 font-medium"
+                            >
+                              Check on Map
+                            </a>
+                          ) : (
+                            <span className="text-gray-300" title={shown.problem}>Check on Map</span>
+                          )}
                           <button onClick={() => saveEdit(store.id)} disabled={saving} className="text-green-600 hover:text-green-800 font-medium">
                             Save
                           </button>
@@ -535,6 +651,19 @@ export default function StoresPage() {
                         <td className="px-3 py-2 text-gray-600">{ch?.name || store.channelId}</td>
                         <td className="px-3 py-2 text-gray-500">{store.province || "\u2014"}</td>
                         <td className="px-3 py-2 text-gray-500">{store.region || "\u2014"}</td>
+                        <td
+                          className={`px-3 py-2 font-mono ${coords.ok ? "text-gray-500" : "text-amber-700 font-semibold"}`}
+                          title={coords.ok ? "" : coords.problem}
+                        >
+                          {store.gpsLat?.trim() || "\u2014"}
+                          {!coords.ok && <span className="ml-1" aria-label="coordinate problem">\u26a0</span>}
+                        </td>
+                        <td
+                          className={`px-3 py-2 font-mono ${coords.ok ? "text-gray-500" : "text-amber-700 font-semibold"}`}
+                          title={coords.ok ? "" : coords.problem}
+                        >
+                          {store.gpsLng?.trim() || "\u2014"}
+                        </td>
                         <td className="px-3 py-2 text-gray-600">{rep?.name || store.repCode}</td>
                         <td className="px-3 py-2 text-right text-gray-600">{fmt(store.monthlySales)}</td>
                         <td className="px-3 py-2 text-center">
@@ -556,7 +685,20 @@ export default function StoresPage() {
                         <td className="px-3 py-2 text-right text-gray-600">{store.duration}m</td>
                         <td className="px-3 py-2 text-gray-500">{store.dayOfWeek || "\u2014"}</td>
                         <td className="px-3 py-2 text-gray-500">{store.weekNumber || "\u2014"}</td>
-                        <td className="px-3 py-2 text-right">
+                        <td className="px-3 py-2 text-right space-x-2 whitespace-nowrap">
+                          {mappable ? (
+                            <a
+                              href={googleMapsUrl(coords.lat, coords.lng)}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Open ${coords.lat}, ${coords.lng} in Google Maps`}
+                              className="text-blue-600 hover:text-blue-800 font-medium"
+                            >
+                              Check on Map
+                            </a>
+                          ) : (
+                            <span className="text-gray-300" title={coords.problem}>Check on Map</span>
+                          )}
                           <button onClick={() => startEdit(store)} className="text-iram-green hover:text-red-800 font-medium">
                             Edit
                           </button>

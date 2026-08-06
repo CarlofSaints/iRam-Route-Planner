@@ -20,6 +20,15 @@ export async function GET(request: NextRequest) {
     const teamName = new Map(teams.map((t) => [t.id, t.name]));
     const roleName = new Map(visitRoles.map((r) => [r.id, r.name]));
 
+    // A rep with no visitRoleId IS the primary sales role — that absence is how
+    // every rep predating visit roles keeps working. Exporting it as an empty
+    // cell made the whole column look broken (all 227 reps are primary), and it
+    // did not round-trip: re-importing a blank clears the role rather than
+    // setting it. Name the primary role explicitly, exactly as /reps renders it.
+    const primaryRoleName = visitRoles.find((r) => r.isPrimary)?.name || "Sales Rep";
+    const roleNameFor = (visitRoleId?: string) =>
+      visitRoleId ? roleName.get(visitRoleId) || primaryRoleName : primaryRoleName;
+
     // Team and Visit Role are included so this file round-trips through the
     // importer — editing a column in Excel is how you reassign 147 reps
     // without dragging each one.
@@ -38,7 +47,7 @@ export async function GET(request: NextRequest) {
         rep.homeAddress || "",
         rep.workingHoursPerDay ?? 8.5,
         teamName.get(rep.teamId) || "",
-        rep.visitRoleId ? roleName.get(rep.visitRoleId) || "" : "",
+        roleNameFor(rep.visitRoleId),
       ]);
     }
 
