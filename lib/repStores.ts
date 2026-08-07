@@ -4,6 +4,7 @@ import {
   Channel,
   VisitRole,
   ChannelRoleDefault,
+  FrequencyType,
   PRIMARY_VISIT_ROLE_ID,
   DEFAULT_VISIT_ROLES,
 } from "./types";
@@ -31,6 +32,64 @@ export function resolveRoleDefault(
   const set = channel?.roleDefaults?.[role.id];
   if (set) return { frequency: set.frequency, duration: set.duration };
   return { frequency: role.frequency, duration: role.duration };
+}
+
+/**
+ * Does this role call on this channel at all?
+ *
+ * Switched off means the role's reps skip every store in the channel entirely —
+ * no route stop, no minutes against capacity. Everything else keeps calling,
+ * including a channel that has never been configured for this role, because
+ * absence has to go on meaning "yes" for the data that predates the switch.
+ *
+ * The primary role is never switched off here: its reps are allocated store by
+ * store via `Store.repCode`, so a channel-level "no" would silently strip
+ * stores out of a sales rep's own route with nothing on the store to explain it.
+ */
+export function roleCallsOnChannel(
+  channel: Channel | undefined,
+  role: VisitRole
+): boolean {
+  if (role.isPrimary) return true;
+  return channel?.roleDefaults?.[role.id]?.enabled !== false;
+}
+
+/**
+ * The roleDefaults entry a channel should hold for a role, given what that role
+ * should call at and whether it calls at all — or `undefined` for no entry.
+ *
+ * An entry is only kept when it says something the fallback does not: different
+ * numbers, or switched off. Values that match the role's own defaults go back
+ * to INHERITING, so a channel toggled off and on again, or re-imported from an
+ * unedited spreadsheet, is not silently pinned to today's numbers — a later
+ * edit on the Visit Roles page has to keep reaching it.
+ *
+ * The Channels grid and the Channels importer both write through this. They are
+ * the only two things that create these entries, and they must agree.
+ */
+export function roleDefaultFor(
+  role: VisitRole,
+  frequency: FrequencyType,
+  duration: number,
+  calls: boolean
+): ChannelRoleDefault | undefined {
+  if (!calls) return { frequency, duration, enabled: false };
+  if (frequency === role.frequency && duration === role.duration) return undefined;
+  return { frequency, duration };
+}
+
+/** Flip one role's switch, returning the channel's new roleDefaults. */
+export function withRoleEnabled(
+  roleDefaults: Record<string, ChannelRoleDefault> | undefined,
+  role: VisitRole,
+  next: boolean
+): Record<string, ChannelRoleDefault> {
+  const out = { ...(roleDefaults ?? {}) };
+  const current = out[role.id] ?? { frequency: role.frequency, duration: role.duration };
+  const entry = roleDefaultFor(role, current.frequency, current.duration, next);
+  if (entry) out[role.id] = entry;
+  else delete out[role.id];
+  return out;
 }
 
 /**
@@ -78,6 +137,10 @@ export function getStoresForRep(
     const byId = new Map(channels.map((c) => [c.id, c]));
     return allStores
       .filter((s) => s.repCode2 === rep.code || s.repCode3 === rep.code)
+      // A channel this role has been switched off for drops out completely,
+      // rather than coming back with some token frequency that would still be
+      // routed and still be charged to the rep's hours.
+      .filter((s) => roleCallsOnChannel(byId.get(s.channelId), role))
       .map((s) => {
         const d = resolveRoleDefault(byId.get(s.channelId), role);
         return { ...s, frequency: d.frequency, duration: d.duration };

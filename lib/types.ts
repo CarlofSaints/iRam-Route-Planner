@@ -2,6 +2,20 @@
 export interface ChannelRoleDefault {
   frequency: FrequencyType;
   duration: number; // minutes per visit
+  /**
+   * Whether this role calls on this channel at all.
+   *
+   * Some roles never visit some channels, and there is no frequency or
+   * duration that expresses that — every value, including the smallest one,
+   * still puts a call in the route and hours on the capacity line. Only an
+   * explicit "no" removes them.
+   *
+   * `undefined` means yes, deliberately: every entry written before this field
+   * existed omits it, and a channel with no entry at all still falls back to
+   * the role's own rhythm. So nothing needs migrating, and the only way to be
+   * switched off is to have been switched off on purpose.
+   */
+  enabled?: boolean;
 }
 
 export interface Channel {
@@ -173,6 +187,25 @@ export interface VisitRole {
 }
 
 export const PRIMARY_VISIT_ROLE_ID = "sales";
+
+/**
+ * The Channels spreadsheet's column headings for one non-primary visit role.
+ *
+ * Shared by the export and the import so the file round-trips: this is the only
+ * definition of those names, and a role renamed on the Visit Roles page renames
+ * its columns in both directions at once.
+ *
+ * The primary role has no entry here on purpose — its values ARE the channel's
+ * own "Frequency" and "Duration (min)" columns, and giving it a second pair
+ * would create two spreadsheet cells writing to one field.
+ */
+export function roleColumns(role: VisitRole) {
+  return {
+    calls: `${role.name} Calls`,
+    frequency: `${role.name} Frequency`,
+    duration: `${role.name} Duration (min)`,
+  };
+}
 
 /**
  * The name of the visit role a rep performs.

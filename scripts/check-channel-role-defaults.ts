@@ -11,7 +11,7 @@
  *
  * Run: npx tsx scripts/check-channel-role-defaults.ts
  */
-import { resolveRoleDefault, getStoresForRep, getRoleForRep } from "../lib/repStores";
+import { resolveRoleDefault, roleCallsOnChannel, getStoresForRep, getRoleForRep } from "../lib/repStores";
 import { Channel, Rep, Store, VisitRole, FrequencyType } from "../lib/types";
 import { computeCapacity } from "../lib/capacity";
 
@@ -186,6 +186,59 @@ const qcRowNoChannels = computeCapacity([qcRep], STORES, null, ROLES).reps.find(
   (r) => r.repCode === "Q1"
 )!;
 check("capacity without channels matches pre-feature behaviour", qcRowNoChannels.callsPerMonth, 1);
+
+// ---- the per-role "does not call on this channel" switch ----
+//
+// The load-bearing rule is the same one as above, one level down: the flag is
+// absent everywhere in the existing data, so absence has to keep meaning "yes".
+// Everything up to here already proves that — none of those channels carry the
+// flag and every assertion passed — so these cover the switch being ON.
+check("no flag anywhere means every role still calls", [
+  roleCallsOnChannel(byId.get("makro"), QC),
+  roleCallsOnChannel(byId.get("mica"), QC),
+  roleCallsOnChannel(byId.get("bex"), TRAINING),
+], [true, true, true]);
+
+const MAKRO_QC_OFF: Channel[] = CHANNELS.map((c) =>
+  c.id === "makro"
+    ? { ...c, roleDefaults: { qc: { frequency: "monthly", duration: 240, enabled: false } } }
+    : c
+);
+const offById = new Map(MAKRO_QC_OFF.map((c) => [c.id, c]));
+
+check("an explicit false switches the role off", roleCallsOnChannel(offById.get("makro"), QC), false);
+check("an explicit true is on", roleCallsOnChannel({ ...CHANNELS[1], roleDefaults: { qc: { frequency: "monthly", duration: 10, enabled: true } } }, QC), true);
+check("switching QC off leaves Training on the same channel alone", roleCallsOnChannel(offById.get("makro"), TRAINING), true);
+check("the primary role is never switched off", roleCallsOnChannel(offById.get("makro"), SALES), true);
+
+// The point of the switch: the stores leave the route entirely. A tiny
+// frequency would still be planned and still be charged for.
+const qcStoresOff = getStoresForRep(qcRep, STORES, QC, null, MAKRO_QC_OFF);
+check(
+  "a switched-off channel's stores drop out of the role's list",
+  qcStoresOff.map((s) => s.channelId),
+  ["mica", "bex"]
+);
+check(
+  "the stores that remain are unaffected",
+  qcStoresOff.map((s) => [s.frequency, s.duration]),
+  [["quarterly", 60], ["bimonthly", 30]]
+);
+
+const primaryUnaffected = getStoresForRep(primaryRep, STORES, SALES, null, MAKRO_QC_OFF);
+check(
+  "the sales rep keeps all three stores regardless",
+  primaryUnaffected.map((s) => s.id),
+  ["s1", "s2", "s3"]
+);
+
+// Capacity has to agree with the route, or a rep shows hours for calls that
+// were never planned. Mica quarterly (0.333) + Bex bimonthly (0.5) = 0.83 → 1.
+const qcRowOff = computeCapacity([qcRep], STORES, null, ROLES, MAKRO_QC_OFF).reps.find(
+  (r) => r.repCode === "Q1"
+)!;
+check("capacity drops the switched-off channel too", qcRowOff.storeCount, 2);
+check("capacity counts only the channels still switched on", qcRowOff.callsPerMonth, 1);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);
