@@ -136,9 +136,6 @@ export default function MapView({
   const center: [number, number] = [-26.2, 28.05];
   const zoom = 10;
 
-  const fmt = (n: number) =>
-    "R " + (n ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-
   // Per-day polyline colors (cycle through for multi-day views)
   const lineColors = ["#DC2626", "#2563EB", "#16A34A", "#D97706", "#7C3AED", "#0891B2", "#DB2777", "#65A30D"];
 
@@ -193,7 +190,6 @@ export default function MapView({
                     <span className="text-gray-500">Rep:</span> {rep?.name || store.repCode}
                     {rep && <span className="text-gray-500"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span>}
                   </p>
-                  <p><span className="text-gray-500">Sales:</span> {fmt(store.monthlySales)}</p>
                   <p><span className="text-gray-500">ID:</span> {store.placeId}</p>
                 </div>
               </Popup>

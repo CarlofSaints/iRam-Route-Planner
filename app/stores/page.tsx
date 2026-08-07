@@ -196,39 +196,6 @@ export default function StoresPage() {
 
   useEffect(() => { load(); }, []);
 
-  // Rankings
-  const rankings = useMemo(() => {
-    const sorted = [...stores].sort((a, b) => (b.monthlySales ?? 0) - (a.monthlySales ?? 0));
-    const overallRank = new Map<string, number>();
-    sorted.forEach((s, i) => overallRank.set(s.id, i + 1));
-
-    const repRank = new Map<string, number>();
-    const byRep = new Map<string, Store[]>();
-    stores.forEach((s) => {
-      const arr = byRep.get(s.repCode) || [];
-      arr.push(s);
-      byRep.set(s.repCode, arr);
-    });
-    byRep.forEach((arr) => {
-      arr.sort((a, b) => (b.monthlySales ?? 0) - (a.monthlySales ?? 0));
-      arr.forEach((s, i) => repRank.set(s.id, i + 1));
-    });
-
-    const channelRank = new Map<string, number>();
-    const byCh = new Map<string, Store[]>();
-    stores.forEach((s) => {
-      const arr = byCh.get(s.channelId) || [];
-      arr.push(s);
-      byCh.set(s.channelId, arr);
-    });
-    byCh.forEach((arr) => {
-      arr.sort((a, b) => (b.monthlySales ?? 0) - (a.monthlySales ?? 0));
-      arr.forEach((s, i) => channelRank.set(s.id, i + 1));
-    });
-
-    return { overallRank, repRank, channelRank };
-  }, [stores]);
-
   const channelMap = useMemo(() => new Map(channels.map((c) => [c.id, c])), [channels]);
   const repMap = useMemo(() => new Map(reps.map((r) => [r.code, r])), [reps]);
 
@@ -384,10 +351,6 @@ export default function StoresPage() {
         "SECONDARY REPRESENTATIVE NAME",
         "THIRD REPRESENTATIVE ID",
         "THIRD REPRESENTATIVE NAME",
-        "MONTHLY AVERAGE",
-        "RANK OVERALL",
-        "RANK IN REP",
-        "RANK IN CHANNEL",
         "FREQUENCY",
         "DURATION (MIN)",
         "DAY",
@@ -422,10 +385,6 @@ export default function StoresPage() {
           rep2?.name || "",
           s.repCode3 || "",
           rep3?.name || "",
-          s.monthlySales ?? 0,
-          rankings.overallRank.get(s.id) ?? "",
-          rankings.repRank.get(s.id) ?? "",
-          rankings.channelRank.get(s.id) ?? "",
           getFrequencyLabel(s.frequency),
           s.duration ?? 0,
           s.dayOfWeek || "",
@@ -438,8 +397,7 @@ export default function StoresPage() {
         { wch: 14 }, { wch: 34 }, { wch: 20 }, { wch: 16 }, { wch: 18 },
         { wch: 14 }, { wch: 14 }, { wch: 46 }, { wch: 14 }, { wch: 24 },
         { wch: 16 }, { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 16 },
-        { wch: 24 }, { wch: 16 }, { wch: 12 }, { wch: 12 }, { wch: 14 },
-        { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 8 },
+        { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 8 },
       ];
       // Freeze the header so 1 200 rows stay readable.
       ws["!freeze"] = { xSplit: "0", ySplit: "1" };
@@ -459,7 +417,7 @@ export default function StoresPage() {
           : [["", "None — this is every store."]]),
         [],
         ["Re-uploading this file"],
-        ["", "Store Upload reads PLACE ID, PLACE NAME, CHANNEL, REGION, the three REPRESENTATIVE ID columns, GPS LATITUDE, GPS LONGITUDE and MONTHLY AVERAGE."],
+        ["", "Store Upload reads PLACE ID, PLACE NAME, CHANNEL, REGION, the three REPRESENTATIVE ID columns, GPS LATITUDE and GPS LONGITUDE. Channel names are matched ignoring case, and a name that matches nothing creates a new channel."],
         ["", "It does NOT read FREQUENCY, DURATION, DAY, WEEK or PROVINCE — those are set on the Channels page or by editing a store, and a change made in this file will not come back in."],
         ["", "Correcting the GPS LATITUDE and GPS LONGITUDE columns and re-uploading is the bulk way to fix the stores listed under GPS PROBLEM."],
         ["", "Leave the SECONDARY and THIRD REPRESENTATIVE ID columns alone unless you mean to change them — because those columns are present, blanking one clears that rep from the store."],
@@ -667,10 +625,6 @@ export default function StoresPage() {
                 <th className="px-3 py-2 bg-gray-50">Latitude</th>
                 <th className="px-3 py-2 bg-gray-50">Longitude</th>
                 <th className="px-3 py-2 bg-gray-50">Rep</th>
-                <th className="px-3 py-2 bg-gray-50 text-right">Monthly Sales</th>
-                <th className="px-3 py-2 bg-gray-50 text-center">Rank Overall</th>
-                <th className="px-3 py-2 bg-gray-50 text-center">Rank/Rep</th>
-                <th className="px-3 py-2 bg-gray-50 text-center">Rank/Channel</th>
                 <th className="px-3 py-2 bg-gray-50">Frequency</th>
                 <th className="px-3 py-2 bg-gray-50 text-right">Duration</th>
                 <th className="px-3 py-2 bg-gray-50">Day</th>
@@ -769,10 +723,6 @@ export default function StoresPage() {
                             ))}
                           </select>
                         </td>
-                        <td className="px-3 py-2 text-right text-gray-600">{fmt(store.monthlySales)}</td>
-                        <td className="px-3 py-2 text-center text-gray-400">{rankings.overallRank.get(store.id)}</td>
-                        <td className="px-3 py-2 text-center text-gray-400">{rankings.repRank.get(store.id)}</td>
-                        <td className="px-3 py-2 text-center text-gray-400">{rankings.channelRank.get(store.id)}</td>
                         <td className="px-3 py-2">
                           <select
                             value={editData.frequency || "monthly"}
@@ -861,22 +811,6 @@ export default function StoresPage() {
                               {" "}({getVisitRoleName(rep.visitRoleId, visitRoles)})
                             </span>
                           )}
-                        </td>
-                        <td className="px-3 py-2 text-right text-gray-600">{fmt(store.monthlySales)}</td>
-                        <td className="px-3 py-2 text-center">
-                          <span className="inline-flex items-center justify-center w-7 h-5 rounded bg-blue-50 text-blue-700 font-medium">
-                            {rankings.overallRank.get(store.id)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <span className="inline-flex items-center justify-center w-7 h-5 rounded bg-green-50 text-green-700 font-medium">
-                            {rankings.repRank.get(store.id)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-center">
-                          <span className="inline-flex items-center justify-center w-7 h-5 rounded bg-purple-50 text-purple-700 font-medium">
-                            {rankings.channelRank.get(store.id)}
-                          </span>
                         </td>
                         <td className="px-3 py-2 text-gray-600">{getFrequencyLabel(store.frequency)}</td>
                         <td className="px-3 py-2 text-right text-gray-600">{store.duration}m</td>

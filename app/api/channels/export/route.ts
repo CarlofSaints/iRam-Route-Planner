@@ -118,6 +118,10 @@ export async function GET() {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${filename}"`,
+        // Without this a browser is free to apply heuristic freshness to a GET
+        // with no cache headers and re-serve yesterday's download — which looks
+        // exactly like "the new columns never appeared".
+        "Cache-Control": "no-store, must-revalidate",
       },
     });
   } catch (err) {

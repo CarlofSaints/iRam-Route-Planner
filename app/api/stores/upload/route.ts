@@ -21,7 +21,25 @@ export async function POST(request: NextRequest) {
     const existingChannels = await getChannels();
     const existingReps = await getReps();
     const existingStores = await getStores();
-    const channelMap = new Map(existingChannels.map((c) => [c.name, c]));
+    /**
+     * Channels are matched on a normalised name, not the literal string.
+     *
+     * An exact match meant "MAKRO", "Makro" and "makro" were three different
+     * channels, and an unrecognised name is silently CREATED — so one
+     * inconsistent capitalisation in a spreadsheet quietly forked a channel,
+     * and every store on that row inherited the new channel's blank defaults
+     * instead of the real one's.
+     */
+    const channelKey = (name: string) => name.trim().toLowerCase();
+    const channelMap = new Map<string, Channel>();
+    for (const c of existingChannels) {
+      // First one wins if two channels already differ only by case. This
+      // lookup must never be what decides one of them no longer exists.
+      if (!channelMap.has(channelKey(c.name))) channelMap.set(channelKey(c.name), c);
+    }
+    // Saved separately from the lookup, so a case-duplicate that the map had to
+    // drop is still written back rather than deleted.
+    const channelsToSave: Channel[] = [...existingChannels];
     const repMap = new Map(existingReps.map((r) => [r.code, r]));
     const pinnedStoreIds = overriddenStoreIds(await getStoreOverrides());
 
@@ -65,7 +83,6 @@ export async function POST(request: NextRequest) {
     for (const row of rows) {
       let placeId: string, storeName: string, repCode: string, repName: string;
       let channelName: string, lat: string, lng: string, region: string;
-      let rawSales: string;
       // Secondary/third reps are optional; blank for the vast majority of stores.
       let repCode2: string, repName2: string, repCode3: string, repName3: string;
 
@@ -82,7 +99,6 @@ export async function POST(request: NextRequest) {
         lat = col(row, "Gps latitude");
         lng = col(row, "Gps longitude");
         region = col(row, "State", "Territory");
-        rawSales = "";
         // Channel from Tags: "INDEPENDENT','GAUTENG" → first tag = channel
         const tags = col(row, "Tags");
         const tagParts = tags.split(/[',]+/).map((t) => t.trim()).filter(Boolean);
@@ -100,7 +116,6 @@ export async function POST(request: NextRequest) {
         channelName = col(row, "CHANNEL", "Channel", "CHANNEL NAME", "Channel Name");
         lat = col(row, "GPS LATITUDE", "Gps latitude", "Gps Latitude", "GPS_LATITUDE", "Latitude");
         lng = col(row, "GPS LONGITUDE", "Gps longitude", "Gps Longitude", "GPS_LONGITUDE", "Longitude");
-        rawSales = col(row, "MONTHLY AVERAGE", "VALUE", "Value", "Monthly Average", "Sales");
         // Province is only a stand-in for region on files that have no region
         // column at all — plenty of source files call the same thing either
         // name. On a sheet carrying BOTH (the Stores export does), they are two
@@ -111,19 +126,18 @@ export async function POST(request: NextRequest) {
           : col(row, "PROVINCE", "Province");
       }
 
-      const sales = Number((rawSales || "").replace(/[^0-9.\-]/g, "") || 0);
-
       if (!placeId || !storeName) { skippedRows++; continue; }
 
       // Auto-create channel
-      if (channelName && !channelMap.has(channelName)) {
+      if (channelName && !channelMap.has(channelKey(channelName))) {
         const ch: Channel = {
           id: channelName.toLowerCase().replace(/[^a-z0-9]/g, "_"),
           name: channelName,
           frequency: "monthly",
           duration: 30,
         };
-        channelMap.set(channelName, ch);
+        channelMap.set(channelKey(channelName), ch);
+        channelsToSave.push(ch);
       }
 
       // Auto-create reps — primary plus any secondary/third on the row
@@ -148,7 +162,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
-      const channel = channelMap.get(channelName);
+      const channel = channelName ? channelMap.get(channelKey(channelName)) : undefined;
       const channelId = channel?.id || "";
 
       if (storeMap.has(placeId)) {
@@ -171,7 +185,6 @@ export async function POST(request: NextRequest) {
         if (hasRep3Column) existing.repCode3 = repCode3 || undefined;
         existing.gpsLat = lat;
         existing.gpsLng = lng;
-        existing.monthlySales = sales;
         if (region) existing.region = region;
         updatedCount++;
       } else {
@@ -186,7 +199,10 @@ export async function POST(request: NextRequest) {
           ...(repCode3 ? { repCode3 } : {}),
           gpsLat: lat,
           gpsLng: lng,
-          monthlySales: sales,
+          // iRam does not track store sales, so nothing reads or displays this
+          // any more. Kept at 0 to satisfy the stored shape rather than dropped
+          // from the type, so re-enabling it is a UI change and not a migration.
+          monthlySales: 0,
           // Inherit the channel's defaults. These used to be hardcoded to
           // monthly/30, so every uploaded store ignored its channel's settings
           // from the moment it was created.
@@ -200,7 +216,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    await saveChannels(Array.from(channelMap.values()));
+    await saveChannels(channelsToSave);
     await saveReps(Array.from(repMap.values()));
     await saveStores(Array.from(storeMap.values()));
 

@@ -109,8 +109,6 @@ export default function DashboardPage() {
     });
   }, []);
 
-  const totalRevenue = useMemo(() => stores.reduce((s, st) => s + (st.monthlySales ?? 0), 0), [stores]);
-
   // Visit metrics
   const totalVisits = visits.length;
   const completedVisits = useMemo(() => visits.filter((v) => isCompletedVisit(v)).length, [visits]);
@@ -123,7 +121,6 @@ export default function DashboardPage() {
       const teamReps = reps.filter((r) => r.teamId === team.id);
       const teamRepCodes = new Set(teamReps.map((r) => r.code));
       const teamStores = stores.filter((s) => teamRepCodes.has(s.repCode));
-      const revenue = teamStores.reduce((s, st) => s + (st.monthlySales ?? 0), 0);
       const channelIds = new Set(teamStores.map((s) => s.channelId));
       const teamVisits = visits.filter((v) => teamRepCodes.has(v.repCode));
       const teamCompleted = teamVisits.filter((v) => isCompletedVisit(v)).length;
@@ -133,34 +130,40 @@ export default function DashboardPage() {
         repCount: teamReps.length,
         storeCount: teamStores.length,
         channelCount: channelIds.size,
-        revenue,
-        contribution: totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0,
+        contribution: totalVisits > 0 ? (teamVisits.length / totalVisits) * 100 : 0,
         visitCount: teamVisits.length,
         completed: teamCompleted,
         incomplete: teamIncomplete,
       };
     });
-  }, [teams, reps, stores, visits, totalRevenue]);
+  }, [teams, reps, stores, visits, totalVisits]);
 
   const channelStats = useMemo(() => {
+    // A visit names the store it happened at, not the channel, so the channel
+    // has to be looked up through the store.
+    const channelOfStore = new Map(stores.map((s) => [s.placeId, s.channelId]));
+    const visitsByChannel = new Map<string, number>();
+    for (const v of visits) {
+      const id = channelOfStore.get(v.storeCode);
+      if (id) visitsByChannel.set(id, (visitsByChannel.get(id) ?? 0) + 1);
+    }
     return channels.map((ch) => {
       const chStores = stores.filter((s) => s.channelId === ch.id);
-      const revenue = chStores.reduce((s, st) => s + (st.monthlySales ?? 0), 0);
       const repCodes = new Set(chStores.map((s) => s.repCode));
+      const visitCount = visitsByChannel.get(ch.id) ?? 0;
       return {
         ...ch,
         storeCount: chStores.length,
-        revenue,
+        visitCount,
         repCount: repCodes.size,
-        contribution: totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0,
+        contribution: totalVisits > 0 ? (visitCount / totalVisits) * 100 : 0,
       };
     });
-  }, [channels, stores, totalRevenue]);
+  }, [channels, stores, visits, totalVisits]);
 
   const repStats = useMemo(() => {
     return reps.map((rep) => {
       const repStores = stores.filter((s) => s.repCode === rep.code);
-      const revenue = repStores.reduce((s, st) => s + (st.monthlySales ?? 0), 0);
       const repVisits = visits.filter((v) => v.repCode === rep.code);
       const repCompleted = repVisits.filter((v) => isCompletedVisit(v)).length;
       const repIncomplete = repVisits.filter((v) => !isCompletedVisit(v)).length;
@@ -169,22 +172,18 @@ export default function DashboardPage() {
       return {
         ...rep,
         storeCount: repStores.length,
-        revenue,
-        contribution: totalRevenue > 0 ? (revenue / totalRevenue) * 100 : 0,
+        contribution: totalVisits > 0 ? (repVisits.length / totalVisits) * 100 : 0,
         visitCount: repVisits.length,
         completed: repCompleted,
         incomplete: repIncomplete,
         storesVisited: uniqueStoresVisited,
       };
     });
-  }, [reps, stores, visits, totalRevenue]);
+  }, [reps, stores, visits, totalVisits]);
 
-  const teamSort = useSortable(teamStats, "revenue");
-  const channelSort = useSortable(channelStats, "revenue");
-  const repSort = useSortable(repStats, "revenue");
-
-  const fmt = (n: number) =>
-    "R " + (n ?? 0).toLocaleString("en-ZA", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const teamSort = useSortable(teamStats, "visitCount");
+  const channelSort = useSortable(channelStats, "visitCount");
+  const repSort = useSortable(repStats, "visitCount");
 
   if (loading) {
     return (
@@ -222,12 +221,6 @@ export default function DashboardPage() {
             value: channels.length.toLocaleString(),
             color: "bg-purple-500",
             icon: "M4 6a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2V6zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V6zM4 16a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2H6a2 2 0 01-2-2v-2zm10 0a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z",
-          },
-          {
-            label: "Monthly Revenue",
-            value: fmt(totalRevenue),
-            color: "bg-iram-green",
-            icon: "M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z",
           },
         ].map((stat) => (
           <div key={stat.label} className="bg-white rounded-xl p-5 shadow-sm border border-gray-100">
@@ -299,7 +292,6 @@ export default function DashboardPage() {
                 <SortHeader label="Reps" field="repCount" align="right" {...teamSort} />
                 <SortHeader label="Stores" field="storeCount" align="right" {...teamSort} />
                 <SortHeader label="Channels" field="channelCount" align="right" {...teamSort} />
-                <SortHeader label="Revenue" field="revenue" align="right" {...teamSort} />
                 <SortHeader label="Visits" field="visitCount" align="right" {...teamSort} />
                 <SortHeader label="Contribution" field="contribution" align="right" {...teamSort} />
               </tr>
@@ -313,7 +305,6 @@ export default function DashboardPage() {
                   <td className="px-6 py-3 text-right text-gray-600">{team.repCount}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{team.storeCount}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{team.channelCount}</td>
-                  <td className="px-6 py-3 text-right text-gray-600">{fmt(team.revenue)}</td>
                   <td className="px-6 py-3 text-right">
                     {team.visitCount > 0 ? (
                       <div className="flex items-center justify-end gap-1.5">
@@ -351,7 +342,6 @@ export default function DashboardPage() {
               <tr className="bg-gray-50 text-xs text-gray-500 uppercase tracking-wider">
                 <SortHeader label="Channel" field="name" {...channelSort} />
                 <SortHeader label="Stores" field="storeCount" align="right" {...channelSort} />
-                <SortHeader label="Revenue" field="revenue" align="right" {...channelSort} />
                 <SortHeader label="Reps" field="repCount" align="right" {...channelSort} />
                 <SortHeader label="Contribution" field="contribution" align="right" {...channelSort} />
               </tr>
@@ -361,7 +351,6 @@ export default function DashboardPage() {
                 <tr key={ch.id} className="hover:bg-gray-50">
                   <td className="px-6 py-3 font-medium text-gray-900">{ch.name}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{ch.storeCount}</td>
-                  <td className="px-6 py-3 text-right text-gray-600">{fmt(ch.revenue)}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{ch.repCount}</td>
                   <td className="px-6 py-3 text-right">
                     <div className="flex items-center justify-end gap-2">
@@ -390,7 +379,6 @@ export default function DashboardPage() {
                 <SortHeader label="Rep" field="name" {...repSort} />
                 <SortHeader label="Code" field="code" {...repSort} />
                 <SortHeader label="Stores" field="storeCount" align="right" {...repSort} />
-                <SortHeader label="Revenue" field="revenue" align="right" {...repSort} />
                 <SortHeader label="Visits" field="visitCount" align="right" {...repSort} />
                 <SortHeader label="Stores Hit" field="storesVisited" align="right" {...repSort} />
                 <SortHeader label="Contribution" field="contribution" align="right" {...repSort} />
@@ -402,7 +390,6 @@ export default function DashboardPage() {
                   <td className="px-6 py-3 font-medium text-gray-900">{rep.name}<span className="font-normal text-gray-400"> ({getVisitRoleName(rep.visitRoleId, visitRoles)})</span></td>
                   <td className="px-6 py-3 text-gray-500">{rep.code}</td>
                   <td className="px-6 py-3 text-right text-gray-600">{rep.storeCount}</td>
-                  <td className="px-6 py-3 text-right text-gray-600">{fmt(rep.revenue)}</td>
                   <td className="px-6 py-3 text-right">
                     {rep.visitCount > 0 ? (
                       <div className="flex items-center justify-end gap-1.5">
