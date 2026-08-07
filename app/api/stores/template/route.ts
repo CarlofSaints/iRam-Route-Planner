@@ -111,50 +111,84 @@ function buildStandard(roles: VisitRole[]): Variant {
   return { label: "Standard", filename: "Store_Upload_Template", headers, widths, examples, notes };
 }
 
-const PERIGEE: Variant = {
-  label: "Perigee site export",
-  filename: "Store_Upload_Template_Perigee",
-  headers: [
+/**
+ * The Perigee site-export layout, with the same per-role columns appended.
+ *
+ * The role columns are read from the file's headers regardless of which layout
+ * the uploader detects, so they work here exactly as they do in Standard.
+ * Perigee itself will never emit them — they are ours, added to the end so a
+ * real Perigee export can be opened, have its role columns filled in and be
+ * uploaded without rearranging anything.
+ */
+function buildPerigee(roles: VisitRole[]): Variant {
+  const extraRoles = roles.filter((r) => !r.isPrimary);
+
+  const headers = [
     "ID",
     "Name",
     "Representative ID",
     "Representative name",
-    "Representative ID 2",
-    "Representative name 2",
-    "Representative ID 3",
-    "Representative name 3",
     "Gps latitude",
     "Gps longitude",
     "State",
     "Tags",
-  ],
-  widths: [16, 34, 20, 26, 22, 26, 22, 26, 16, 16, 20, 30],
-  examples: [
-    ["1001", "Checkers Fourways", "R01", "Thabo Mokoena", "R02", "Lerato Dlamini", "", "", "-26.0186", "28.0089", "Gauteng", "RETAIL','GAUTENG"],
-    ["1002", "Spar Rivonia", "R01", "Thabo Mokoena", "", "", "", "", "-26.0575", "28.0605", "Gauteng", "INDEPENDENT','GAUTENG"],
-  ],
-  notes: [
+    ...extraRoles.flatMap((r) => {
+      const c = storeRoleColumns(r);
+      return [c.id, c.name];
+    }),
+  ];
+
+  const widths = [
+    16, 34, 20, 26, 16, 16, 20, 30,
+    ...extraRoles.flatMap((r) => [Math.max(14, r.name.length + 5), Math.max(20, r.name.length + 8)]),
+  ];
+
+  const blanks = extraRoles.flatMap(() => ["", ""]);
+  const firstFilled = extraRoles.flatMap((_, i) => (i === 0 ? ["R09", "Lerato Dlamini"] : ["", ""]));
+
+  const examples: (string | number)[][] = [
+    ["1001", "Checkers Fourways", "R01", "Thabo Mokoena", "-26.0186", "28.0089", "Gauteng", "RETAIL','GAUTENG", ...firstFilled],
+    ["1002", "Spar Rivonia", "R01", "Thabo Mokoena", "-26.0575", "28.0605", "Gauteng", "INDEPENDENT','GAUTENG", ...blanks],
+  ];
+
+  const notes: [string, string][] = [
     ["Why this variant exists", "The uploader switches to this layout only when the file has all three headers ID, Name and Representative ID spelled exactly like that. Renaming any of them sends the file down the Standard path instead."],
     ["ID", "Required. The store's Perigee site ID — used as the merge key."],
     ["Name", "Required. Rows missing ID or Name are skipped."],
     ["Representative ID", "The PRIMARY rep code. Created automatically if unknown."],
     ["Representative name", "Only used when the rep code is new."],
-    ["Representative ID 2 / 3", "Optional second and third reps on the store. Leave blank where they do not apply. Recorded against the store, but routing, capacity and the map still use the PRIMARY rep only."],
     ["Gps latitude", "Decimal degrees, negative for South Africa."],
     ["Gps longitude", "Decimal degrees."],
     ["State", "Region. \"Territory\" is accepted as an alias."],
-    ["Tags", "Channel comes from the FIRST tag — e.g. \"RETAIL','GAUTENG\" gives channel RETAIL. Tags split on commas and apostrophes."],
-    ["No sales column", "This layout has no monthly value, so every store imports at 0 — load values via the Standard template if you need them."],
-    ["Unconfirmed", "These headers were carried over from the Repsly Places export and have not been checked against a real Perigee file. Send one through and this template will be corrected."],
-  ],
-};
+    ["Tags", "Channel comes from the FIRST tag — e.g. \"RETAIL','GAUTENG\" gives channel RETAIL. Tags split on commas and apostrophes. Channel names are matched ignoring case."],
+  ];
+
+  for (const r of extraRoles) {
+    const c = storeRoleColumns(r);
+    notes.push([
+      c.id,
+      `The rep who does ${r.name} calls at this store. Not part of a Perigee export — added here so roles can be set from this layout too. Optional; leave blank where ${r.name} does not call.`,
+    ]);
+    notes.push([c.name, "Only used when that rep code is new."]);
+  }
+
+  notes.push(
+    ["", ""],
+    ["Which template do I want?", "Standard, unless you are starting from a file Perigee produced. The two differ only in what the first few columns are called — the role columns are identical in both, and both end up in the same place."],
+    ["Unconfirmed", "The Perigee column names here were carried over from the Repsly Places export and have NOT been checked against a real Perigee file. Send one through and this template will be corrected."],
+    ["Delete the example rows", "The two sample rows are illustration only — clear them before uploading."]
+  );
+
+  return { label: "Perigee site export", filename: "Store_Upload_Template_Perigee", headers, widths, examples, notes };
+}
 
 export async function GET(request: NextRequest) {
   try {
     await requireSession();
 
     const format = request.nextUrl.searchParams.get("format") === "perigee" ? "perigee" : "standard";
-    const variant = format === "perigee" ? PERIGEE : buildStandard(await getVisitRoles());
+    const roles = await getVisitRoles();
+    const variant = format === "perigee" ? buildPerigee(roles) : buildStandard(roles);
 
     const ws = XLSX.utils.aoa_to_sheet([variant.headers, ...variant.examples]);
     ws["!cols"] = variant.widths.map((wch) => ({ wch }));

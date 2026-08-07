@@ -110,7 +110,7 @@ export default function StoreUploadPage() {
                 >
                   <span className="block text-sm font-medium text-gray-800">Standard template</span>
                   <span className="block text-xs text-gray-500 mt-0.5">
-                    PLACE ID / PLACE NAME / CHANNEL / reps / GPS / value
+                    Use this one. PLACE ID / PLACE NAME / CHANNEL / a column per visit role / GPS
                   </span>
                 </a>
                 <a
@@ -120,7 +120,8 @@ export default function StoreUploadPage() {
                 >
                   <span className="block text-sm font-medium text-gray-800">Perigee site export</span>
                   <span className="block text-xs text-gray-500 mt-0.5">
-                    ID / Name / Representative ID / Tags — no sales column
+                    Only if you are starting from a file Perigee produced. Same role columns,
+                    but ID / Name / Tags instead of PLACE ID / PLACE NAME / CHANNEL.
                   </span>
                 </a>
               </div>
