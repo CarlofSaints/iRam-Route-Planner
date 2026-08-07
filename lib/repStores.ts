@@ -93,6 +93,37 @@ export function withRoleEnabled(
 }
 
 /**
+ * Who performs a given non-primary role at a given store, if anyone.
+ *
+ * `roleReps` is the source of truth. A store that predates it has no entry at
+ * all, and for those — and only those — the old repCode2/repCode3 pair is still
+ * read, matching the previous behaviour where any occupant of either slot was
+ * treated as calling in their own role. A store gets migrated the first time it
+ * is uploaded with the new columns; until then nobody loses an assignment.
+ *
+ * Returns "" when the role is not performed here. The primary role never comes
+ * through this — it is matched on Store.repCode.
+ */
+export function storeRepForRole(store: Store, role: VisitRole): string {
+  if (role.isPrimary) return store.repCode || "";
+  if (store.roleReps) return store.roleReps[role.id] || "";
+  return store.repCode2 || store.repCode3 || "";
+}
+
+/**
+ * Does this rep perform this role at this store?
+ *
+ * Not `storeRepForRole(...) === rep.code`: on an unmigrated store BOTH old slots
+ * counted, and collapsing them to whichever is non-empty first would silently
+ * drop whoever sits in the third slot.
+ */
+export function storeHasRepInRole(store: Store, rep: Rep, role: VisitRole): boolean {
+  if (role.isPrimary) return store.repCode === rep.code;
+  if (store.roleReps) return store.roleReps[role.id] === rep.code;
+  return store.repCode2 === rep.code || store.repCode3 === rep.code;
+}
+
+/**
  * Resolve the visit role a rep performs. A rep with no visitRoleId — which is
  * every rep created before visit roles existed — is the primary sales role, so
  * existing data keeps behaving exactly as it did.
@@ -136,7 +167,7 @@ export function getStoresForRep(
   if (!role.isPrimary) {
     const byId = new Map(channels.map((c) => [c.id, c]));
     return allStores
-      .filter((s) => s.repCode2 === rep.code || s.repCode3 === rep.code)
+      .filter((s) => storeHasRepInRole(s, rep, role))
       // A channel this role has been switched off for drops out completely,
       // rather than coming back with some token frequency that would still be
       // routed and still be charged to the rep's hours.

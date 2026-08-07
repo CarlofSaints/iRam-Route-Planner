@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession } from "@/lib/auth";
+import { getVisitRoles } from "@/lib/data";
+import { storeRoleColumns, VisitRole } from "@/lib/types";
 import XLSX from "xlsx";
 
 // Blank upload template for Control Centre → Store Upload.
@@ -24,49 +26,90 @@ type Variant = {
   notes: [string, string][];
 };
 
-const STANDARD: Variant = {
-  label: "Standard",
-  filename: "Store_Upload_Template",
-  headers: [
+/**
+ * The Standard template, built around whatever visit roles exist right now.
+ *
+ * The old fixed SECONDARY/THIRD pair is gone: two slots could not hold three
+ * non-primary roles, and neither slot said which role it was for, so the same
+ * column meant a different thing on every row. There is now one ID/NAME pair
+ * per non-primary role, and adding a role on the Visit Roles page adds its
+ * columns here automatically.
+ */
+function buildStandard(roles: VisitRole[]): Variant {
+  const extraRoles = roles.filter((r) => !r.isPrimary);
+  const primaryName = roles.find((r) => r.isPrimary)?.name || "Sales Rep";
+
+  const headers = [
     "PLACE ID",
     "PLACE NAME",
     "CHANNEL",
     "REPRESENTATIVE ID",
     "REPRESENTATIVE NAME",
-    "SECONDARY REPRESENTATIVE ID",
-    "SECONDARY REPRESENTATIVE NAME",
-    "THIRD REPRESENTATIVE ID",
-    "THIRD REPRESENTATIVE NAME",
+    ...extraRoles.flatMap((r) => {
+      const c = storeRoleColumns(r);
+      return [c.id, c.name];
+    }),
     "GPS LATITUDE",
     "GPS LONGITUDE",
-    "MONTHLY AVERAGE",
     "REGION",
-  ],
-  widths: [16, 34, 20, 20, 26, 28, 30, 26, 28, 16, 16, 18, 20],
-  examples: [
-    ["1001", "Checkers Fourways", "RETAIL", "R01", "Thabo Mokoena", "R02", "Lerato Dlamini", "", "", "-26.0186", "28.0089", 125000, "Gauteng"],
-    ["1002", "Spar Rivonia", "INDEPENDENT", "R01", "Thabo Mokoena", "", "", "", "", "-26.0575", "28.0605", 48000, "Gauteng"],
-  ],
-  notes: [
+  ];
+
+  const widths = [
+    16, 34, 20, 20, 26,
+    ...extraRoles.flatMap((r) => [Math.max(14, r.name.length + 5), Math.max(20, r.name.length + 8)]),
+    16, 16, 20,
+  ];
+
+  // Only the first role is filled in on the sample rows — the point being that
+  // these columns are optional and independent, not a set you must complete.
+  const blanksForRoles = extraRoles.flatMap(() => ["", ""]);
+  const firstRoleFilled = extraRoles.flatMap((_, i) =>
+    i === 0 ? ["R09", "Lerato Dlamini"] : ["", ""]
+  );
+
+  const examples: (string | number)[][] = [
+    ["1001", "Checkers Fourways", "RETAIL", "R01", "Thabo Mokoena", ...firstRoleFilled, "-26.0186", "28.0089", "Gauteng"],
+    ["1002", "Spar Rivonia", "INDEPENDENT", "R01", "Thabo Mokoena", ...blanksForRoles, "-26.0575", "28.0605", "Gauteng"],
+  ];
+
+  const notes: [string, string][] = [
     ["PLACE ID", "Required. Unique per store — this is the merge key, so re-uploading the same ID updates that store instead of adding a duplicate."],
     ["PLACE NAME", "Required. Rows missing PLACE ID or PLACE NAME are skipped."],
-    ["CHANNEL", "Channel name. Created automatically if it does not exist yet (defaults: monthly, 30 min) — set the real frequency and duration afterwards in Channels."],
-    ["REPRESENTATIVE ID", "The PRIMARY rep's code. Created automatically if unknown, with blank contact details — fill those in under Reps."],
+    ["CHANNEL", "Channel name, matched ignoring case and surrounding spaces. Created automatically if it does not exist yet (defaults: monthly, 30 min) — set the real frequency and duration afterwards in Channels."],
+    ["REPRESENTATIVE ID", `The ${primaryName}'s code — the rep this store belongs to. Routing, capacity and the map all work off this one. Created automatically if unknown, with blank contact details.`],
     ["REPRESENTATIVE NAME", "Only used when the rep code is new."],
-    ["SECONDARY REPRESENTATIVE ID", "Optional second rep on the store. Leave blank where there is only one. Also created automatically if unknown."],
-    ["SECONDARY REPRESENTATIVE NAME", "Only used when that rep code is new."],
-    ["THIRD REPRESENTATIVE ID", "Optional third rep. Leave blank unless the store genuinely has three."],
-    ["THIRD REPRESENTATIVE NAME", "Only used when that rep code is new."],
+  ];
+
+  if (extraRoles.length === 0) {
+    notes.push([
+      "No other visit roles",
+      "Only the primary role exists, so there are no extra rep columns. Create roles under Visit Roles and they will appear here.",
+    ]);
+  } else {
+    for (const r of extraRoles) {
+      const c = storeRoleColumns(r);
+      notes.push([
+        c.id,
+        `The rep who does ${r.name} calls at this store. Optional — leave blank where ${r.name} does not call here. They get their OWN route at ${r.name}'s frequency and duration, not a ride-along with the ${primaryName}. A rep code that does not exist yet is created and set to ${r.name}.`,
+      ]);
+      notes.push([c.name, "Only used when that rep code is new."]);
+    }
+  }
+
+  notes.push(
     ["GPS LATITUDE", "Decimal degrees, negative for South Africa (e.g. -26.0186). Needed for routing and the map."],
     ["GPS LONGITUDE", "Decimal degrees (e.g. 28.0089)."],
-    ["MONTHLY AVERAGE", "Monthly sales value. Currency symbols and spaces are stripped; blank counts as 0."],
     ["REGION", "Optional free-text region. Province is derived separately from GPS."],
     ["", ""],
-    ["Accepted aliases", "PLACE ID / STORE ID · PLACE NAME / STORE NAME · REPRESENTATIVE ID / REP CODE · SECONDARY REPRESENTATIVE ID / REP CODE 2 / REPRESENTATIVE ID 2 · THIRD REPRESENTATIVE ID / REP CODE 3 / REPRESENTATIVE ID 3 · MONTHLY AVERAGE / VALUE / SALES · REGION / PROVINCE / AREA · LATITUDE / LONGITUDE. Header matching ignores case and surrounding spaces."],
-    ["Secondary and third reps", "These are recorded against the store, but route generation, rep capacity and the map still work off the PRIMARY rep only. Confirm how a secondary rep should be treated before relying on it."],
-    ["Delete the example rows", "The two sample rows are illustration only — clear them before uploading."],
-  ],
-};
+    ["One column per role", "These columns come from the Visit Roles page. Rename a role and its columns are renamed here too — so re-download this template after any change there, or an older file will no longer match."],
+    ["A role is set on the PERSON", "A rep performs one role everywhere. If you put someone in a role's column who is set to a different role under Reps, the upload reports it rather than silently changing how they are planned."],
+    ["Columns left out are left alone", "A column this file does not contain is not touched on stores that already exist. A column that IS present but blank clears that value — that is how you remove a rep from a role."],
+    ["Older files", "SECONDARY / THIRD REPRESENTATIVE ID are still accepted for backwards compatibility, but they cannot say which role they mean. Use the role columns."],
+    ["Delete the example rows", "The two sample rows are illustration only — clear them before uploading."]
+  );
+
+  return { label: "Standard", filename: "Store_Upload_Template", headers, widths, examples, notes };
+}
 
 const PERIGEE: Variant = {
   label: "Perigee site export",
@@ -111,7 +154,7 @@ export async function GET(request: NextRequest) {
     await requireSession();
 
     const format = request.nextUrl.searchParams.get("format") === "perigee" ? "perigee" : "standard";
-    const variant = format === "perigee" ? PERIGEE : STANDARD;
+    const variant = format === "perigee" ? PERIGEE : buildStandard(await getVisitRoles());
 
     const ws = XLSX.utils.aoa_to_sheet([variant.headers, ...variant.examples]);
     ws["!cols"] = variant.widths.map((wch) => ({ wch }));
@@ -131,6 +174,9 @@ export async function GET(request: NextRequest) {
         "Content-Type":
           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         "Content-Disposition": `attachment; filename="${variant.filename}.xlsx"`,
+        // The role columns change whenever a role is added or renamed, so this
+        // download must never be served from a browser's heuristic cache.
+        "Cache-Control": "no-store, must-revalidate",
       },
     });
   } catch (err) {

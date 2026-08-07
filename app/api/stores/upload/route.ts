@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStores, saveStores, getChannels, saveChannels, getReps, saveReps, getStoreOverrides } from "@/lib/data";
+import { getStores, saveStores, getChannels, saveChannels, getReps, saveReps, getStoreOverrides, getVisitRoles } from "@/lib/data";
 import { overriddenStoreIds } from "@/lib/channelDefaults";
-import { Store, Channel, Rep } from "@/lib/types";
+import { Store, Channel, Rep, storeRoleColumns } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
@@ -21,6 +21,7 @@ export async function POST(request: NextRequest) {
     const existingChannels = await getChannels();
     const existingReps = await getReps();
     const existingStores = await getStores();
+    const visitRoles = await getVisitRoles();
     /**
      * Channels are matched on a normalised name, not the literal string.
      *
@@ -79,6 +80,22 @@ export async function POST(request: NextRequest) {
       fileHeaders.some((h) => names.some((n) => h.toLowerCase() === n.toLowerCase()));
     const hasRep2Column = hasHeader("SECONDARY REPRESENTATIVE ID", "REP CODE 2", "REPRESENTATIVE ID 2", "Secondary Rep Code");
     const hasRep3Column = hasHeader("THIRD REPRESENTATIVE ID", "REP CODE 3", "REPRESENTATIVE ID 3", "Third Rep Code");
+
+    /**
+     * One ID/NAME column pair per non-primary visit role, e.g. "TEAM LEADER ID".
+     * A role whose column is absent is left untouched on every store; a role
+     * whose column is present but blank is cleared — that is how a rep is taken
+     * off a role.
+     */
+    const extraRoles = visitRoles.filter((r) => !r.isPrimary);
+    const roleCols = extraRoles.map((role) => {
+      const c = storeRoleColumns(role);
+      return { role, ...c, present: hasHeader(c.id) };
+    });
+    // Reported back rather than silently applied: the role lives on the person,
+    // so putting someone in another role's column does not re-cast them, it just
+    // plans them at the wrong rhythm.
+    const roleMismatches: string[] = [];
 
     for (const row of rows) {
       let placeId: string, storeName: string, repCode: string, repName: string;
@@ -140,7 +157,43 @@ export async function POST(request: NextRequest) {
         channelsToSave.push(ch);
       }
 
-      // Auto-create reps — primary plus any secondary/third on the row
+      // Per-role reps for this row, read from the role-named columns.
+      const rowRoleReps: { roleId: string; code: string }[] = [];
+      for (const rc of roleCols) {
+        if (!rc.present) continue;
+        const code = col(row, rc.id);
+        const name = col(row, rc.name);
+        rowRoleReps.push({ roleId: rc.role.id, code });
+        if (!code) continue;
+
+        const known = repMap.get(code);
+        if (!known) {
+          // A rep who only ever appears under a role's column is that role —
+          // creating them as a primary sales rep would put them on the sales
+          // leaderboard and route them at the wrong rhythm.
+          repMap.set(code, {
+            id: crypto.randomUUID(),
+            code,
+            name,
+            email: "",
+            cell: "",
+            homeAddress: "",
+            homeGpsLat: "",
+            homeGpsLng: "",
+            teamId: "",
+            visitRoleId: rc.role.id,
+          });
+        } else if ((known.visitRoleId || "") !== rc.role.id) {
+          const actual = known.visitRoleId
+            ? visitRoles.find((r) => r.id === known.visitRoleId)?.name || known.visitRoleId
+            : visitRoles.find((r) => r.isPrimary)?.name || "the primary role";
+          roleMismatches.push(
+            `${known.name || code} (${code}) is in the "${rc.id}" column but is set to ${actual} under Reps — they will be planned as ${actual}`
+          );
+        }
+      }
+
+      // Auto-create reps — primary plus any legacy secondary/third on the row
       for (const [code, name] of [
         [repCode, repName],
         [repCode2, repName2],
@@ -161,6 +214,17 @@ export async function POST(request: NextRequest) {
           repMap.set(code, r);
         }
       }
+
+      /** Apply this row's role columns to a store, leaving absent roles alone. */
+      const applyRoleReps = (target: Store) => {
+        if (rowRoleReps.length === 0) return;
+        const next = { ...(target.roleReps ?? {}) };
+        for (const { roleId, code } of rowRoleReps) {
+          if (code) next[roleId] = code;
+          else delete next[roleId];
+        }
+        target.roleReps = next;
+      };
 
       const channel = channelName ? channelMap.get(channelKey(channelName)) : undefined;
       const channelId = channel?.id || "";
@@ -183,13 +247,14 @@ export async function POST(request: NextRequest) {
         // secondaries set elsewhere.
         if (hasRep2Column) existing.repCode2 = repCode2 || undefined;
         if (hasRep3Column) existing.repCode3 = repCode3 || undefined;
+        applyRoleReps(existing);
         existing.gpsLat = lat;
         existing.gpsLng = lng;
         if (region) existing.region = region;
         updatedCount++;
       } else {
         // Add new store
-        storeMap.set(placeId, {
+        const created: Store = {
           id: placeId,
           placeId,
           name: storeName,
@@ -211,7 +276,9 @@ export async function POST(request: NextRequest) {
           dayOfWeek: "",
           weekNumber: "",
           ...(region ? { region } : {}),
-        });
+        };
+        applyRoleReps(created);
+        storeMap.set(placeId, created);
         newCount++;
       }
     }
@@ -228,6 +295,13 @@ export async function POST(request: NextRequest) {
       added: newCount,
       updated: updatedCount,
       total: storeMap.size,
+      // Which role columns this file carried, so a file that silently lacked
+      // them does not look like the roles failed to import.
+      roleColumnsFound: roleCols.filter((r) => r.present).map((r) => r.id),
+      roleColumnsMissing: roleCols.filter((r) => !r.present).map((r) => r.id),
+      // De-duplicated: one person in the wrong column produces one message, not
+      // one per store, and 2 250 rows would otherwise bury the result.
+      roleMismatches: Array.from(new Set(roleMismatches)),
       channels: channelMap.size,
       reps: repMap.size,
       rowsInFile: rows.length,

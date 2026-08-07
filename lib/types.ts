@@ -208,6 +208,23 @@ export function roleColumns(role: VisitRole) {
 }
 
 /**
+ * The Stores spreadsheet's columns naming the rep who performs one non-primary
+ * visit role at a store.
+ *
+ * One pair per role rather than the old SECONDARY/THIRD pair: two slots could
+ * not hold three roles, and a slot never said which role it was for. Shared by
+ * the upload template, the upload parser and the Stores export, so all three
+ * agree and a renamed role renames its columns everywhere at once.
+ *
+ * Upper-cased to match the rest of the Stores template; header matching ignores
+ * case either way.
+ */
+export function storeRoleColumns(role: VisitRole) {
+  const label = role.name.toUpperCase();
+  return { id: `${label} ID`, name: `${label} NAME` };
+}
+
+/**
  * The name of the visit role a rep performs.
  *
  * A rep with no `visitRoleId` IS the primary role — that absence is what keeps
@@ -258,8 +275,20 @@ export interface Store {
   name: string;
   channelId: string;
   repCode: string; // primary rep — the one routing, capacity and the map work off
-  repCode2?: string; // optional secondary rep
-  repCode3?: string; // optional third rep
+  /**
+   * The non-primary rep calling on this store, one per visit role, keyed by
+   * VisitRole.id.
+   *
+   * Replaces the fixed repCode2/repCode3 pair. Two slots could not hold three
+   * non-primary roles, and a slot never said WHICH role it was for — the role
+   * came from whoever happened to be put in it, so the same column meant
+   * something different on every row.
+   */
+  roleReps?: Record<string, string>;
+  /** @deprecated Superseded by roleReps. Still read for stores not yet migrated. */
+  repCode2?: string;
+  /** @deprecated Superseded by roleReps. Still read for stores not yet migrated. */
+  repCode3?: string;
   gpsLat: string;
   gpsLng: string;
   monthlySales: number;

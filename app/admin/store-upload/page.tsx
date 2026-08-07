@@ -6,7 +6,16 @@ export default function StoreUploadPage() {
   const [dragging, setDragging] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [templateMenu, setTemplateMenu] = useState(false);
-  const [result, setResult] = useState<{ ok: boolean; message: string; headers?: string[]; skipped?: number; rowsInFile?: number } | null>(null);
+  const [result, setResult] = useState<{
+    ok: boolean;
+    message: string;
+    headers?: string[];
+    skipped?: number;
+    rowsInFile?: number;
+    roleColumnsFound?: string[];
+    roleColumnsMissing?: string[];
+    roleMismatches?: string[];
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const processFile = async (file: File) => {
@@ -33,6 +42,9 @@ export default function StoreUploadPage() {
           headers: data.fileHeaders,
           skipped: data.skippedRows,
           rowsInFile: data.rowsInFile,
+          roleColumnsFound: data.roleColumnsFound,
+          roleColumnsMissing: data.roleColumnsMissing,
+          roleMismatches: data.roleMismatches,
         });
       } else {
         setResult({ ok: false, message: data.error || "Upload failed" });
@@ -173,6 +185,43 @@ export default function StoreUploadPage() {
               </div>
               <p className="text-[11px] mt-2 text-amber-600">
                 The uploader needs a column matching &quot;PLACE ID&quot; or &quot;STORE ID&quot; and one matching &quot;PLACE NAME&quot; or &quot;STORE NAME&quot;.
+              </p>
+            </div>
+          )}
+
+          {/* What happened to the visit-role columns. Reported even on success:
+              a file that simply lacked them imports perfectly and leaves every
+              role assignment untouched, which reads as "roles didn't work". */}
+          {(result.roleColumnsFound?.length || result.roleColumnsMissing?.length) && (
+            <div className={`mt-2 pt-2 border-t ${result.ok ? "border-green-200" : "border-amber-200"}`}>
+              {result.roleColumnsFound && result.roleColumnsFound.length > 0 && (
+                <p className="text-xs">
+                  Visit role columns read: {result.roleColumnsFound.join(", ")}
+                </p>
+              )}
+              {result.roleColumnsMissing && result.roleColumnsMissing.length > 0 && (
+                <p className="text-xs mt-1">
+                  Not in this file, so left unchanged on every store:{" "}
+                  {result.roleColumnsMissing.join(", ")}. Download the template again to get them.
+                </p>
+              )}
+            </div>
+          )}
+
+          {result.roleMismatches && result.roleMismatches.length > 0 && (
+            <div className={`mt-2 pt-2 border-t ${result.ok ? "border-green-200" : "border-amber-200"}`}>
+              <p className="text-xs font-medium mb-1">
+                {result.roleMismatches.length} rep{result.roleMismatches.length === 1 ? " is" : "s are"} in
+                a role column that does not match their role under Reps:
+              </p>
+              <ul className="list-disc list-inside space-y-0.5">
+                {result.roleMismatches.map((m, i) => (
+                  <li key={i} className="text-[11px]">{m}</li>
+                ))}
+              </ul>
+              <p className="text-[11px] mt-1 opacity-80">
+                A rep performs one role everywhere, so the store was still assigned — but they will be
+                planned at their own role&apos;s frequency and duration. Change their role under Reps if that is wrong.
               </p>
             </div>
           )}

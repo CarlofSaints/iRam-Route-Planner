@@ -1,7 +1,8 @@
 "use client";
 
 import { useState, useEffect, useMemo, useRef } from "react";
-import { Store, Channel, Rep, Team, VisitRole, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel, getVisitRoleName, SA_PROVINCES } from "@/lib/types";
+import { Store, Channel, Rep, Team, VisitRole, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel, getVisitRoleName, storeRoleColumns, SA_PROVINCES } from "@/lib/types";
+import { storeRepForRole } from "@/lib/repStores";
 import { useSession } from "@/components/SessionProvider";
 
 const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -333,6 +334,7 @@ export default function StoresPage() {
     setExporting(true);
     try {
       const { utils, write } = await import("xlsx");
+      const extraRoles = visitRoles.filter((r) => !r.isPrimary);
 
       const header = [
         "PLACE ID",
@@ -347,10 +349,12 @@ export default function StoresPage() {
         "REPRESENTATIVE NAME",
         "VISIT ROLE",
         "TEAM",
-        "SECONDARY REPRESENTATIVE ID",
-        "SECONDARY REPRESENTATIVE NAME",
-        "THIRD REPRESENTATIVE ID",
-        "THIRD REPRESENTATIVE NAME",
+        // One pair per non-primary role, matching the upload template exactly,
+        // so an export can be edited and sent straight back in.
+        ...extraRoles.flatMap((r) => {
+          const c = storeRoleColumns(r);
+          return [c.id, c.name];
+        }),
         "FREQUENCY",
         "DURATION (MIN)",
         "DAY",
@@ -361,8 +365,6 @@ export default function StoresPage() {
 
       for (const s of filtered) {
         const rep = repMap.get(s.repCode);
-        const rep2 = s.repCode2 ? repMap.get(s.repCode2) : undefined;
-        const rep3 = s.repCode3 ? repMap.get(s.repCode3) : undefined;
         const coords = checkCoords(s.gpsLat, s.gpsLng);
         const team = rep?.teamId ? teams.find((t) => t.id === rep.teamId) : undefined;
         rows.push([
@@ -381,10 +383,10 @@ export default function StoresPage() {
           rep?.name || "",
           rep ? getVisitRoleName(rep.visitRoleId, visitRoles) : "",
           team?.name || "",
-          s.repCode2 || "",
-          rep2?.name || "",
-          s.repCode3 || "",
-          rep3?.name || "",
+          ...extraRoles.flatMap((r) => {
+            const code = storeRepForRole(s, r);
+            return [code, code ? repMap.get(code)?.name || "" : ""];
+          }),
           getFrequencyLabel(s.frequency),
           s.duration ?? 0,
           s.dayOfWeek || "",
@@ -396,8 +398,12 @@ export default function StoresPage() {
       ws["!cols"] = [
         { wch: 14 }, { wch: 34 }, { wch: 20 }, { wch: 16 }, { wch: 18 },
         { wch: 14 }, { wch: 14 }, { wch: 46 }, { wch: 14 }, { wch: 24 },
-        { wch: 16 }, { wch: 20 }, { wch: 16 }, { wch: 24 }, { wch: 16 },
-        { wch: 24 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 8 },
+        { wch: 16 }, { wch: 20 },
+        ...extraRoles.flatMap((r) => [
+          { wch: Math.max(14, r.name.length + 5) },
+          { wch: Math.max(20, r.name.length + 8) },
+        ]),
+        { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 8 },
       ];
       // Freeze the header so 1 200 rows stay readable.
       ws["!freeze"] = { xSplit: "0", ySplit: "1" };
@@ -420,7 +426,9 @@ export default function StoresPage() {
         ["", "Store Upload reads PLACE ID, PLACE NAME, CHANNEL, REGION, the three REPRESENTATIVE ID columns, GPS LATITUDE and GPS LONGITUDE. Channel names are matched ignoring case, and a name that matches nothing creates a new channel."],
         ["", "It does NOT read FREQUENCY, DURATION, DAY, WEEK or PROVINCE — those are set on the Channels page or by editing a store, and a change made in this file will not come back in."],
         ["", "Correcting the GPS LATITUDE and GPS LONGITUDE columns and re-uploading is the bulk way to fix the stores listed under GPS PROBLEM."],
-        ["", "Leave the SECONDARY and THIRD REPRESENTATIVE ID columns alone unless you mean to change them — because those columns are present, blanking one clears that rep from the store."],
+        ["", extraRoles.length
+          ? `There is one ID/NAME column pair per visit role (${extraRoles.map((r) => r.name).join(", ")}). Blanking one removes that rep from that role at that store, because the column is present.`
+          : "Only the primary visit role exists, so there are no extra rep columns. Create roles under Visit Roles and they appear here."],
       ];
       const notesWs = utils.aoa_to_sheet(notes);
       notesWs["!cols"] = [{ wch: 22 }, { wch: 110 }];
