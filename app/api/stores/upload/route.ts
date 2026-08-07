@@ -101,7 +101,14 @@ export async function POST(request: NextRequest) {
         lat = col(row, "GPS LATITUDE", "Gps latitude", "Gps Latitude", "GPS_LATITUDE", "Latitude");
         lng = col(row, "GPS LONGITUDE", "Gps longitude", "Gps Longitude", "GPS_LONGITUDE", "Longitude");
         rawSales = col(row, "MONTHLY AVERAGE", "VALUE", "Value", "Monthly Average", "Sales");
-        region = col(row, "REGION", "Region", "PROVINCE", "Province", "AREA", "Area");
+        // Province is only a stand-in for region on files that have no region
+        // column at all — plenty of source files call the same thing either
+        // name. On a sheet carrying BOTH (the Stores export does), they are two
+        // different fields, and falling through would quietly write a store's
+        // province into its region wherever the region happened to be blank.
+        region = hasHeader("REGION", "Region", "AREA", "Area")
+          ? col(row, "REGION", "Region", "AREA", "Area")
+          : col(row, "PROVINCE", "Province");
       }
 
       const sales = Number((rawSales || "").replace(/[^0-9.\-]/g, "") || 0);
