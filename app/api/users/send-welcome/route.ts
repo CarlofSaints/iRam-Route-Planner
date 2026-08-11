@@ -1,78 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, saveUsers } from "@/lib/data";
+import { requirePermission } from "@/lib/auth";
+import { logActivity } from "@/lib/activityLog";
+import { sendWelcomeEmail } from "@/lib/welcomeEmail";
 import bcrypt from "bcryptjs";
 
+/**
+ * RE-SEND a welcome email. This RESETS the target's password to a fresh temp
+ * one — it is not a "resend the same mail" button, and firing it at a live
+ * account locks that person out until they read the email.
+ *
+ * A new user gets their welcome from POST /api/users instead, which mails the
+ * password the admin typed and resets nothing.
+ */
 export async function POST(request: NextRequest) {
   try {
+    // Without this, any signed-in account could reset a Super Admin's password
+    // and read the new one straight out of the response body.
+    const session = await requirePermission("manage_users");
+
     const { userId } = await request.json();
     const users = await getUsers();
-    const user = users.find((u) => u.id === userId);
-    if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    const idx = users.findIndex((u) => u.id === userId);
+    if (idx === -1) return NextResponse.json({ error: "User not found" }, { status: 404 });
+    const user = users[idx];
 
     // Generate a temporary password
     const tempPassword = `iRam${Math.random().toString(36).slice(2, 8)}!`;
-    const idx = users.findIndex((u) => u.id === userId);
     users[idx].password = await bcrypt.hash(tempPassword, 10);
     users[idx].forcePasswordChange = true;
     await saveUsers(users);
 
-    // Send welcome email via Resend if configured
-    const resendKey = process.env.RESEND_API_KEY;
-    if (resendKey) {
-      const emailBody = `
-Hi ${user.name},
+    const result = await sendWelcomeEmail({
+      name: user.name,
+      email: user.email,
+      password: tempPassword,
+      forcePasswordChange: true,
+    });
 
-Welcome to iRam Route Planner!
+    logActivity({
+      action: "Sent welcome email",
+      actor: session?.email || "unknown",
+      actorName: session?.name || "Unknown",
+      summary: `Reset password and ${result.sent ? "emailed" : "FAILED to email"} welcome to ${user.name} (${user.email})${result.sent ? "" : ` — ${result.reason}`}`,
+    });
 
-Your login credentials:
-- URL: ${process.env.NEXT_PUBLIC_APP_URL || "https://i-ram-route-planner.vercel.app"}
-- Email: ${user.email}
-- Temporary Password: ${tempPassword}
-
-You will be asked to change your password on first login.
-
-Regards,
-iRam Team
-      `.trim();
-
-      const emailRes = await fetch("https://api.resend.com/emails", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${resendKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          from: process.env.RESEND_FROM || "iRam <onboarding@resend.dev>",
-          to: user.email,
-          subject: "Welcome to iRam Route Planner",
-          text: emailBody,
-        }),
-      });
-
-      if (!emailRes.ok) {
-        const errData = await emailRes.json().catch(() => ({}));
-        console.error("Resend API error:", emailRes.status, errData);
-        return NextResponse.json({
-          ok: true,
-          sent: false,
-          tempPassword,
-          email: user.email,
-          message: `Email failed (${emailRes.status}): ${errData?.message || errData?.error || "Unknown error"}. Share credentials manually.`,
-        });
-      }
-
+    if (result.sent) {
       return NextResponse.json({ ok: true, sent: true, tempPassword });
     }
 
-    // No Resend key — return temp password for manual sharing
+    // The password HAS been reset either way, so the caller must always get it
+    // back — otherwise a failed send silently locks the user out.
     return NextResponse.json({
       ok: true,
       sent: false,
-      message: "No RESEND_API_KEY configured. Share credentials manually.",
       tempPassword,
       email: user.email,
+      message: `${result.reason} Share credentials manually.`,
     });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const text = String(err);
+    if (text.includes("Unauthorized")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (text.includes("Forbidden")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    return NextResponse.json({ error: text }, { status: 500 });
   }
 }

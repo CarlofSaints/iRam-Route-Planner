@@ -40,7 +40,14 @@ export default function AdminPage() {
   const [users, setUsers] = useState<UserData[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
-  const [newUser, setNewUser] = useState({ name: "", email: "", password: "", role: "viewer" as UserRole });
+  const [newUser, setNewUser] = useState({
+    name: "",
+    email: "",
+    password: "",
+    role: "viewer" as UserRole,
+    sendWelcomeEmail: true,
+    forcePasswordChange: true,
+  });
   const [editing, setEditing] = useState<string | null>(null);
   const [editData, setEditData] = useState<Partial<UserData & { password: string }>>({});
   const [saving, setSaving] = useState(false);
@@ -126,14 +133,31 @@ export default function AdminPage() {
   const showMsg = (text: string, type: "info" | "success" | "error" = "info") => {
     setMsg(text);
     setMsgType(type);
-    setTimeout(() => setMsg(""), 5000);
+    // Errors and temp passwords have to be readable long enough to copy — only
+    // the cheerful ones time out.
+    if (type === "success") setTimeout(() => setMsg(""), 5000);
   };
 
   const load = () => {
     fetch("/api/users")
       .then((r) => r.json())
       .then((data) => {
-        setUsers(data);
+        // Now that the route is permission-gated it can answer with an error
+        // object rather than an array — rendering that would blank the page.
+        if (Array.isArray(data)) {
+          setUsers(data);
+        } else {
+          showMsg(
+            data?.error === "Forbidden"
+              ? "You do not have permission to manage users."
+              : data?.error || "Could not load users",
+            "error"
+          );
+        }
+        setLoading(false);
+      })
+      .catch(() => {
+        showMsg("Could not load users", "error");
         setLoading(false);
       });
   };
@@ -155,9 +179,20 @@ export default function AdminPage() {
     if (!res.ok) {
       showMsg(data.error || "Error", "error");
     } else {
-      showMsg(`User ${data.name} created`, "success");
+      // The user exists either way — a failed email must not read as a failed
+      // create, and it must say the password out loud so it can be shared.
+      if (data.emailRequested && data.emailSent) {
+        showMsg(`User ${data.name} created — welcome email sent to ${data.email}`, "success");
+      } else if (data.emailRequested) {
+        showMsg(
+          `User ${data.name} created, but the welcome email did NOT send. ${data.emailError || ""} Their password is: ${newUser.password}`,
+          "error"
+        );
+      } else {
+        showMsg(`User ${data.name} created — no welcome email sent, share the password manually`, "success");
+      }
       setShowAdd(false);
-      setNewUser({ name: "", email: "", password: "", role: "viewer" });
+      setNewUser({ name: "", email: "", password: "", role: "viewer", sendWelcomeEmail: true, forcePasswordChange: true });
       load();
     }
     setSaving(false);
@@ -300,12 +335,21 @@ export default function AdminPage() {
       </div>
 
       {msg && (
-        <div className={`p-3 rounded-lg text-sm ${
+        <div className={`p-3 rounded-lg text-sm flex items-start justify-between gap-3 ${
           msgType === "success" ? "bg-green-50 text-green-700" :
           msgType === "error" ? "bg-red-50 text-red-700" :
           "bg-blue-50 text-blue-700"
         }`}>
-          {msg}
+          <span className="break-words">{msg}</span>
+          {msgType !== "success" && (
+            <button
+              onClick={() => setMsg("")}
+              title="Dismiss"
+              className="shrink-0 opacity-60 hover:opacity-100 font-medium px-1"
+            >
+              ✕
+            </button>
+          )}
         </div>
       )}
 
@@ -450,6 +494,36 @@ export default function AdminPage() {
                 ))}
               </select>
             </div>
+          </div>
+          <div className="mt-4 space-y-2 border-t border-gray-100 pt-4">
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newUser.sendWelcomeEmail}
+                onChange={(e) => setNewUser({ ...newUser, sendWelcomeEmail: e.target.checked })}
+                className="mt-0.5 rounded border-gray-300 text-iram-green focus:ring-iram-green"
+              />
+              <span className="text-sm text-gray-700">
+                Send welcome email with credentials
+                <span className="block text-xs text-gray-400">
+                  Emails the password typed above. Leave this off to share it yourself.
+                </span>
+              </span>
+            </label>
+            <label className="flex items-start gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={newUser.forcePasswordChange}
+                onChange={(e) => setNewUser({ ...newUser, forcePasswordChange: e.target.checked })}
+                className="mt-0.5 rounded border-gray-300 text-iram-green focus:ring-iram-green"
+              />
+              <span className="text-sm text-gray-700">
+                Force password change on first login
+                <span className="block text-xs text-gray-400">
+                  They pick their own password before reaching the app.
+                </span>
+              </span>
+            </label>
           </div>
           <div className="mt-4 flex gap-2">
             <button onClick={addUser} disabled={saving} className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark disabled:opacity-50">

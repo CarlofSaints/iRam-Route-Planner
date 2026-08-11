@@ -1,25 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, saveUsers } from "@/lib/data";
 import { User, UserRole } from "@/lib/types";
-import { getSession } from "@/lib/auth";
+import { requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { sendWelcomeEmail } from "@/lib/welcomeEmail";
 import bcrypt from "bcryptjs";
 
 const SUPER_ADMIN_FORBIDDEN = { error: "Only Super Admins can add, edit, or remove Super Admin users" };
 
+/** Map the errors thrown by requirePermission onto real status codes. */
+function authFailure(err: unknown): NextResponse | null {
+  const text = String(err);
+  if (text.includes("Unauthorized")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (text.includes("Forbidden")) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  return null;
+}
+
 export async function GET() {
   try {
+    await requirePermission("manage_users");
     const users = await getUsers();
     const safe = users.map(({ password: _, ...u }) => u);
     return NextResponse.json(safe);
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
-    const session = await getSession();
+    // Creating a user is an escalation path — without this, any signed-in
+    // account could mint an admin for itself.
+    const session = await requirePermission("manage_users");
     const body = await request.json();
     const { name, email, password, role } = body;
 
@@ -37,6 +49,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Email already exists" }, { status: 409 });
     }
 
+    const forcePasswordChange = body.forcePasswordChange ?? false;
     const hashed = await bcrypt.hash(password, 10);
     const newUser: User = {
       id: crypto.randomUUID(),
@@ -44,23 +57,46 @@ export async function POST(request: NextRequest) {
       email,
       password: hashed,
       role: (role as UserRole) || "viewer",
-      forcePasswordChange: body.forcePasswordChange ?? false,
+      forcePasswordChange,
     };
     users.push(newUser);
     await saveUsers(users);
 
-    logActivity({ action: "Created user", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Created user ${name} (${email}) with role ${role || "viewer"}` });
+    // Deliberately AFTER the save: a mail failure must not cost us the user.
+    // The password sent is the one the admin typed — creating an account does
+    // not reset anything, unlike the re-send in /api/users/send-welcome.
+    const emailResult = body.sendWelcomeEmail
+      ? await sendWelcomeEmail({ name, email, password, forcePasswordChange })
+      : null;
+
+    const emailSummary = !emailResult
+      ? "no welcome email requested"
+      : emailResult.sent
+        ? "welcome email sent"
+        : `welcome email FAILED — ${emailResult.reason}`;
+
+    logActivity({ action: "Created user", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Created user ${name} (${email}) with role ${role || "viewer"} (${emailSummary})` });
 
     const { password: _, ...safe } = newUser;
-    return NextResponse.json(safe, { status: 201 });
+    return NextResponse.json(
+      {
+        ...safe,
+        emailRequested: !!body.sendWelcomeEmail,
+        emailSent: emailResult?.sent ?? false,
+        emailError: emailResult && !emailResult.sent ? emailResult.reason : undefined,
+      },
+      { status: 201 }
+    );
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
 export async function PUT(request: NextRequest) {
   try {
-    const session = await getSession();
+    // This route can set any user's password outright, so it is a takeover path
+    // for anyone who can reach it. Self-service lives on /api/account instead.
+    const session = await requirePermission("manage_users");
     const body = await request.json();
     const { id, name, email, role, password, forcePasswordChange, cell } = body;
 
@@ -89,13 +125,13 @@ export async function PUT(request: NextRequest) {
     const { password: _, ...safe } = users[idx];
     return NextResponse.json(safe);
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
-    const session = await getSession();
+    const session = await requirePermission("manage_users");
     const { id } = await request.json();
     const users = await getUsers();
     const target = users.find((u) => u.id === id);
@@ -112,6 +148,6 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
