@@ -4,6 +4,43 @@ import { useState, useEffect, useRef } from "react";
 import { Rep, VisitRole, Team } from "@/lib/types";
 import { useSession } from "@/components/SessionProvider";
 
+/**
+ * Opens whatever has been typed into a Home Address field in Google Maps, in a
+ * new tab, so the person capturing it can see it resolves to a real place
+ * before saving. Routes anchor on the rep's home, so a typo here quietly moves
+ * someone's whole day.
+ *
+ * Declared at module level on purpose — a component defined inside RepsPage
+ * would remount on every keystroke and steal focus from the address input.
+ */
+function CheckAddressOnGoogle({ address, compact = false }: { address?: string; compact?: boolean }) {
+  const value = (address || "").trim();
+  const open = () =>
+    window.open(
+      `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(value)}`,
+      "_blank",
+      "noopener,noreferrer"
+    );
+
+  return (
+    <button
+      type="button"
+      onClick={open}
+      disabled={!value}
+      title={value ? "Open this address in Google Maps to confirm it" : "Enter an address first"}
+      className={`mt-1 inline-flex items-center gap-1 rounded border border-gray-200 font-medium text-iram-green transition-colors hover:bg-gray-50 disabled:cursor-not-allowed disabled:border-gray-100 disabled:text-gray-300 ${
+        compact ? "px-1.5 py-0.5 text-[11px]" : "px-2 py-1 text-xs"
+      }`}
+    >
+      <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} aria-hidden="true">
+        <path d="M12 21s7-6.2 7-11a7 7 0 10-14 0c0 4.8 7 11 7 11z" strokeLinejoin="round" />
+        <circle cx="12" cy="10" r="2.5" />
+      </svg>
+      Check on Google
+    </button>
+  );
+}
+
 export default function RepsPage() {
   const { can } = useSession();
   const [reps, setReps] = useState<Rep[]>([]);
@@ -252,6 +289,7 @@ export default function RepsPage() {
                   placeholder={placeholder}
                   className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
                 />
+                {key === "homeAddress" && <CheckAddressOnGoogle address={newRep.homeAddress} />}
               </div>
             ))}
             <div>
@@ -344,6 +382,7 @@ export default function RepsPage() {
                           onChange={(e) => setEditData({ ...editData, homeAddress: e.target.value })}
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
+                        <CheckAddressOnGoogle address={editData.homeAddress} compact />
                       </td>
                       <td className="px-6 py-3">
                         <select
