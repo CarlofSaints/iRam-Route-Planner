@@ -129,7 +129,16 @@ export async function POST(request: NextRequest) {
         if (name) existing.name = name;
         if (email) existing.email = email;
         if (cell) existing.cell = cell;
-        if (homeAddress) existing.homeAddress = homeAddress;
+        // Same rule as the edit form: a new address invalidates the coordinates
+        // derived from the old one, so clear them rather than leave the rep
+        // anchored on where they used to live.
+        if (homeAddress) {
+          if (homeAddress.trim() !== (existing.homeAddress || "").trim()) {
+            existing.homeGpsLat = "";
+            existing.homeGpsLng = "";
+          }
+          existing.homeAddress = homeAddress;
+        }
         if (workingHoursPerDay !== undefined) existing.workingHoursPerDay = workingHoursPerDay;
         // Blank Team clears the assignment — that is how you unassign in bulk.
         if (teamRaw) existing.teamId = teamId!;

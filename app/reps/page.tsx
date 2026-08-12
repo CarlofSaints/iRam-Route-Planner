@@ -41,6 +41,31 @@ function CheckAddressOnGoogle({ address, compact = false }: { address?: string; 
   );
 }
 
+interface GeocodeOutcome {
+  repId: string;
+  code: string;
+  name: string;
+  address: string;
+  status: "saved" | "review" | "failed" | "skipped";
+  reason: string;
+  lat?: number;
+  lng?: number;
+  formattedAddress?: string;
+}
+
+interface GeocodeResponse {
+  considered: number;
+  saved: number;
+  needsReview: number;
+  failed: number;
+  outcomes: GeocodeOutcome[];
+}
+
+/** A rep is anchored on their home only when BOTH coordinates are present. */
+function hasHomeGps(rep: Rep): boolean {
+  return !!(rep.homeGpsLat || "").trim() && !!(rep.homeGpsLng || "").trim();
+}
+
 export default function RepsPage() {
   const { can } = useSession();
   const [reps, setReps] = useState<Rep[]>([]);
@@ -56,10 +81,20 @@ export default function RepsPage() {
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState<{ type: "success" | "error"; text: string } | null>(null);
   const [savingTeamFor, setSavingTeamFor] = useState<string | null>(null);
+  const [geocoding, setGeocoding] = useState(false);
+  const [geocodeResult, setGeocodeResult] = useState<GeocodeResponse | null>(null);
+  const [geocodeError, setGeocodeError] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
   const canExport = can("export_data");
   const canImport = can("import_reps");
+  const canManageReps = can("manage_reps");
+
+  // Reps whose address is captured but whose route still anchors on a store
+  // centroid because no coordinate was ever derived from it.
+  const awaitingGeocode = reps.filter(
+    (r) => (r.homeAddress || "").trim() && !hasHomeGps(r)
+  ).length;
 
   const load = () => {
     fetch("/api/reps")
@@ -101,6 +136,50 @@ export default function RepsPage() {
       load();
     } finally {
       setSavingTeamFor(null);
+    }
+  };
+
+  /**
+   * Derive home coordinates from home addresses. The route engine already
+   * starts each day at the rep's home when it has one — this is what finally
+   * gives it one. `force` re-submits a result the server held back as too
+   * vague, once a human has looked at it.
+   */
+  const runGeocode = async (body: { all: true } | { repId: string; force?: boolean }) => {
+    setGeocoding(true);
+    setGeocodeError("");
+    try {
+      const res = await fetch("/api/reps/geocode", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setGeocodeError(data.error || `Geocoding failed (${res.status})`);
+        return;
+      }
+      // Merge single-rep results into any review list already on screen, so
+      // accepting one row doesn't wipe the other rows still awaiting a decision.
+      setGeocodeResult((prev) => {
+        if (!prev || "all" in body) return data as GeocodeResponse;
+        const incoming = (data as GeocodeResponse).outcomes;
+        const byId = new Map(prev.outcomes.map((o) => [o.repId, o]));
+        for (const o of incoming) byId.set(o.repId, o);
+        const outcomes = [...byId.values()];
+        return {
+          considered: prev.considered,
+          saved: outcomes.filter((o) => o.status === "saved").length,
+          needsReview: outcomes.filter((o) => o.status === "review").length,
+          failed: outcomes.filter((o) => o.status === "failed").length,
+          outcomes,
+        };
+      });
+      load();
+    } catch (e) {
+      setGeocodeError(String(e));
+    } finally {
+      setGeocoding(false);
     }
   };
 
@@ -240,6 +319,16 @@ export default function RepsPage() {
               />
             </label>
           )}
+          {canManageReps && awaitingGeocode > 0 && (
+            <button
+              onClick={() => runGeocode({ all: true })}
+              disabled={geocoding}
+              title="Look up each rep's home address and store the coordinates, so routes start from home instead of the middle of their stores"
+              className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              {geocoding ? "Locating..." : `Set Home GPS (${awaitingGeocode})`}
+            </button>
+          )}
           <button
             onClick={() => setShowAdd(true)}
             className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors"
@@ -266,6 +355,74 @@ export default function RepsPage() {
           <button onClick={() => setImportMsg(null)} className="text-xs opacity-60 hover:opacity-100 flex-shrink-0">
             dismiss
           </button>
+        </div>
+      )}
+
+      {geocodeError && (
+        <div className="p-3 rounded-lg text-sm mb-6 bg-red-50 text-red-700">{geocodeError}</div>
+      )}
+
+      {/* Geocoding results. Vague matches are listed rather than saved — a
+          suburb centroid looks identical to a real home once it is stored. */}
+      {geocodeResult && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-6">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <h3 className="font-semibold text-gray-900 text-sm">
+                Home GPS: {geocodeResult.saved} saved
+                {geocodeResult.needsReview > 0 && `, ${geocodeResult.needsReview} need checking`}
+                {geocodeResult.failed > 0 && `, ${geocodeResult.failed} not found`}
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Saved reps now start their day at home. Anything below was too vague to
+                store on its own — check it on Google, then accept it or fix the address.
+              </p>
+            </div>
+            <button
+              onClick={() => setGeocodeResult(null)}
+              className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0"
+            >
+              dismiss
+            </button>
+          </div>
+          <div className="space-y-2 max-h-80 overflow-y-auto">
+            {geocodeResult.outcomes
+              .filter((o) => o.status !== "saved")
+              .map((o) => (
+                <div
+                  key={o.repId}
+                  className={`p-3 rounded-lg text-xs ${
+                    o.status === "review" ? "bg-amber-50" : "bg-red-50"
+                  }`}
+                >
+                  <div className="font-medium text-gray-900">
+                    {o.name} <span className="font-mono text-gray-500">({o.code})</span>
+                  </div>
+                  <div className="text-gray-600 mt-0.5">Captured: {o.address}</div>
+                  <div className={o.status === "review" ? "text-amber-700 mt-0.5" : "text-red-700 mt-0.5"}>
+                    {o.reason}
+                  </div>
+                  {o.status === "review" && (
+                    <div className="mt-2 flex items-center gap-3">
+                      <CheckAddressOnGoogle address={o.address} compact />
+                      <button
+                        onClick={() => runGeocode({ repId: o.repId, force: true })}
+                        disabled={geocoding}
+                        className="mt-1 px-1.5 py-0.5 text-[11px] font-medium rounded border border-amber-300 text-amber-800 hover:bg-amber-100 disabled:opacity-50"
+                      >
+                        Use it anyway
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            {geocodeResult.outcomes.every((o) => o.status === "saved") && (
+              <p className="text-xs text-gray-500">Every address resolved cleanly. Nothing to check.</p>
+            )}
+          </div>
+          <p className="text-xs text-amber-700 mt-3">
+            Routes already generated still use the old anchor — regenerate them to pick this up.
+          </p>
         </div>
       )}
 
@@ -337,6 +494,7 @@ export default function RepsPage() {
                 <th className="px-6 py-3">Email</th>
                 <th className="px-6 py-3">Cell</th>
                 <th className="px-6 py-3">Home Address</th>
+                <th className="px-6 py-3">Starts Day At</th>
                 <th className="px-6 py-3">Team</th>
                 <th className="px-6 py-3">Visit Role</th>
                 <th className="px-6 py-3 text-center">Hours/Day</th>
@@ -383,6 +541,9 @@ export default function RepsPage() {
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
                         <CheckAddressOnGoogle address={editData.homeAddress} compact />
+                      </td>
+                      <td className="px-6 py-3 text-xs text-gray-400 italic">
+                        Save, then Set Home GPS
                       </td>
                       <td className="px-6 py-3">
                         <select
@@ -438,6 +599,36 @@ export default function RepsPage() {
                       <td className="px-6 py-3 text-gray-600">{rep.email || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600">{rep.cell || <span className="text-gray-300 italic">Not set</span>}</td>
                       <td className="px-6 py-3 text-gray-600 max-w-[200px] truncate">{rep.homeAddress || <span className="text-gray-300 italic">Not set</span>}</td>
+                      {/* Never blank: falling back to the store centroid IS the
+                          behaviour, and a rep silently anchored in the middle of
+                          their patch is the thing worth seeing at a glance. */}
+                      <td className="px-6 py-3 text-xs">
+                        {hasHomeGps(rep) ? (
+                          <span className="text-gray-600" title={`${rep.homeGpsLat}, ${rep.homeGpsLng}`}>
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-green-50 text-green-700 font-medium">
+                              Home
+                            </span>
+                            <span className="block text-gray-400 font-mono mt-0.5">
+                              {parseFloat(rep.homeGpsLat).toFixed(4)}, {parseFloat(rep.homeGpsLng).toFixed(4)}
+                            </span>
+                          </span>
+                        ) : (
+                          <span className="text-gray-500">
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-gray-100 text-gray-600">
+                              Store centroid
+                            </span>
+                            {canManageReps && (rep.homeAddress || "").trim() && (
+                              <button
+                                onClick={() => runGeocode({ repId: rep.id })}
+                                disabled={geocoding}
+                                className="block mt-1 text-iram-green hover:underline disabled:opacity-50"
+                              >
+                                Set from address
+                              </button>
+                            )}
+                          </span>
+                        )}
+                      </td>
                       <td className="px-6 py-3">
                         {/* Live dropdown — no need to enter edit mode just to
                             move someone between teams. */}

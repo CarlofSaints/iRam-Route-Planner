@@ -108,6 +108,82 @@ export function decodePolyline(encoded: string): [number, number][] {
   return points;
 }
 
+export interface GeocodeResult {
+  lat: number;
+  lng: number;
+  /** What Google thinks the address is — show this so a human can eyeball it. */
+  formattedAddress: string;
+  /** ROOFTOP | RANGE_INTERPOLATED | GEOMETRIC_CENTER | APPROXIMATE */
+  locationType: string;
+  /** Google matched something, but not everything it was given. */
+  partialMatch: boolean;
+  /** More than one candidate came back — the address is ambiguous. */
+  multipleMatches: boolean;
+}
+
+/**
+ * Forward-geocode an address to a coordinate.
+ *
+ * Deliberately returns Google's confidence signals rather than just a point.
+ * Rep home addresses here are largely informal — "Stand no 644 moletjie ga
+ * semenya polokwane", "Bushbuckridge college view stand no B480" — and Google
+ * answers those by falling back to the suburb, the town, or the province
+ * centroid, with no error. Saving that silently would anchor a rep's entire
+ * week on a point tens of kilometres from where they live, and it would look
+ * perfectly plausible on the map. Callers must decide what confidence is good
+ * enough; this function does not decide for them.
+ *
+ * `region=za` biases results to South Africa, so a bare street name doesn't
+ * resolve to a same-named street on another continent.
+ */
+export async function geocodeAddress(address: string): Promise<GeocodeResult | null> {
+  if (!hasGoogleMapsKey()) return null;
+  const query = (address || "").trim();
+  if (!query) return null;
+
+  await delay(80); // rate limit
+
+  const url =
+    `https://maps.googleapis.com/maps/api/geocode/json` +
+    `?address=${encodeURIComponent(query)}` +
+    `&region=za` +
+    `&key=${API_KEY()}`;
+
+  const res = await fetch(url);
+  if (!res.ok) return null;
+
+  const data = await res.json();
+  if (data.status !== "OK" || !data.results?.length) return null;
+
+  const top = data.results[0];
+  const loc = top.geometry?.location;
+  if (typeof loc?.lat !== "number" || typeof loc?.lng !== "number") return null;
+
+  return {
+    lat: loc.lat,
+    lng: loc.lng,
+    formattedAddress: top.formatted_address || "",
+    locationType: top.geometry?.location_type || "APPROXIMATE",
+    partialMatch: !!top.partial_match,
+    multipleMatches: data.results.length > 1,
+  };
+}
+
+/**
+ * Is a geocode precise enough to write to a rep record without a human looking
+ * at it? Only an exact building (ROOFTOP) or a point interpolated along a known
+ * street range qualifies, and only when Google matched the whole address and
+ * had exactly one candidate. Everything else is a suburb/town centroid wearing
+ * a street address's clothes.
+ */
+export function isConfidentGeocode(g: GeocodeResult): boolean {
+  return (
+    (g.locationType === "ROOFTOP" || g.locationType === "RANGE_INTERPOLATED") &&
+    !g.partialMatch &&
+    !g.multipleMatches
+  );
+}
+
 /**
  * Reverse-geocode a lat/lng to get the administrative area (province/region).
  * Returns the `administrative_area_level_1` short name, or null.

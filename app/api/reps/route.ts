@@ -27,7 +27,19 @@ export async function PUT(request: NextRequest) {
     if (updates.name !== undefined) reps[idx].name = updates.name;
     if (updates.email !== undefined) reps[idx].email = updates.email;
     if (updates.cell !== undefined) reps[idx].cell = updates.cell;
+    // A changed home address invalidates coordinates derived from the old one.
+    // Leaving them would anchor the rep's whole week on where they used to
+    // live, silently and plausibly — so drop them and let the address be
+    // geocoded again. An update that supplies coordinates itself is respected.
+    const addressChanged =
+      updates.homeAddress !== undefined &&
+      updates.homeAddress.trim() !== (reps[idx].homeAddress || "").trim();
+
     if (updates.homeAddress !== undefined) reps[idx].homeAddress = updates.homeAddress;
+    if (addressChanged && updates.homeGpsLat === undefined && updates.homeGpsLng === undefined) {
+      reps[idx].homeGpsLat = "";
+      reps[idx].homeGpsLng = "";
+    }
     if (updates.homeGpsLat !== undefined) reps[idx].homeGpsLat = updates.homeGpsLat;
     if (updates.homeGpsLng !== undefined) reps[idx].homeGpsLng = updates.homeGpsLng;
     if (updates.teamId !== undefined) reps[idx].teamId = updates.teamId;
