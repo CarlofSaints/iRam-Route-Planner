@@ -1,15 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken, sessionSecret } from "@/lib/sessionToken";
+import { isRepAllowedPath } from "@/lib/repAccess";
+import type { SessionPayload } from "@/lib/types";
 
-// /api/cron is listed here so Vercel's scheduler can reach it without a session
-// cookie — the route itself authenticates via CRON_SECRET or an admin session.
 // /sso/callback is public by necessity: it is the route that CREATES the session,
 // so it can't require one. It authenticates via the Hub-signed IRAM_SSO_SECRET token.
 //
 // /api/seed is deliberately NOT here. It was, and because it called saveUsers()
 // with a single-element array, any anonymous POST wiped the user table and reset
 // the admin to a password hardcoded in the repo.
-const PUBLIC_PATHS = ["/login", "/api/auth", "/api/cron", "/sso/callback"];
+//
+// ⚠️ EXACT matches, not prefixes. These were matched with startsWith, which made
+// every child of /api/auth public too — including /api/auth/change-password,
+// which took a userId from the request body, set that user's password and
+// returned a signed session cookie for them. A public path must be the ONE route
+// that is public, not everything filed beneath it.
+const PUBLIC_EXACT = ["/login", "/api/auth", "/sso/callback"];
+
+// /api/cron is a prefix because Vercel's scheduler hits several routes under it
+// without a session cookie. Each one authenticates via CRON_SECRET itself.
+const PUBLIC_PREFIXES = ["/api/cron"];
 
 // Bootstrapping a brand-new deploy is a chicken-and-egg problem: /api/seed
 // creates the first admin, so there is no session cookie to present yet. Rather
@@ -23,7 +33,8 @@ export async function middleware(request: NextRequest) {
 
   // Allow public paths and static assets
   if (
-    PUBLIC_PATHS.some((p) => pathname.startsWith(p)) ||
+    PUBLIC_EXACT.includes(pathname) ||
+    PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.match(/\.(jpg|png|svg|ico|css|js)$/)
@@ -45,7 +56,9 @@ export async function middleware(request: NextRequest) {
   // so this is the only thing standing in front of them — a presence check
   // would let a hand-written cookie read the whole database.
   const token = request.cookies.get("iram_session")?.value;
-  const session = token ? await verifyToken(token, sessionSecret()) : null;
+  const session = token
+    ? await verifyToken<SessionPayload>(token, sessionSecret())
+    : null;
   if (!session) {
     // API callers get a 401 they can actually read; page loads get the login
     // screen. Redirecting an API POST to /login returns HTML with a 200 and
@@ -54,6 +67,26 @@ export async function middleware(request: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }
     return NextResponse.redirect(new URL("/login", request.url));
+  }
+
+  // A rep may reach their own profile and nothing else. Filtering by repCode in
+  // the page (which is what /map, /routes and /capacity do) is decorative — the
+  // APIs behind them hand back every rep, store and route to any valid session.
+  // Denying the route outright is the only thing that actually holds.
+  //
+  // The role here comes from the cookie, so a role CHANGE only takes effect on
+  // the user's next sign-in — promoting someone out of `rep` does not widen
+  // their access until then. Accounts are created as reps and stay reps, so
+  // that lag is a nuisance rather than a hole, but it is why a promoted rep
+  // must be told to sign out and back in.
+  if (session.role === "rep" && !isRepAllowedPath(pathname)) {
+    if (pathname.startsWith("/api/")) {
+      return NextResponse.json(
+        { error: "Reps may only view and update their own profile." },
+        { status: 403 }
+      );
+    }
+    return NextResponse.redirect(new URL("/account", request.url));
   }
 
   return NextResponse.next();

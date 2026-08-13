@@ -1,19 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
-import { encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
+import { encodeSession, requireSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload } from "@/lib/types";
 import bcrypt from "bcryptjs";
 
+/**
+ * The forced password change on first sign-in.
+ *
+ * 🔴 This route used to take `userId` from the REQUEST BODY and set that user's
+ * password, with no session check — and it was reachable unauthenticated,
+ * because the middleware matched the public path `/api/auth` with startsWith,
+ * which made every child of it public too. Anyone who learned a user id could
+ * overwrite that account's password and be handed a signed session cookie for
+ * it. Both halves are now fixed: the middleware matches public paths exactly,
+ * and the only account this can touch is the caller's own.
+ */
 export async function POST(request: NextRequest) {
   try {
-    const { userId, newPassword } = await request.json();
-    if (!userId || !newPassword || newPassword.length < 6) {
+    // Whoever is signing in already holds a cookie at this point — POST /api/auth
+    // sets one on valid credentials even when forcePasswordChange is true.
+    const current = await requireSession();
+    const { newPassword } = await request.json();
+    if (!newPassword || newPassword.length < 6) {
       return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
     }
 
     const users = await getUsers();
-    const idx = users.findIndex((u) => u.id === userId);
+    // Deliberately the SESSION's user, never an id supplied by the caller.
+    const idx = users.findIndex((u) => u.id === current.userId);
     if (idx === -1) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
     users[idx].password = await bcrypt.hash(newPassword, 10);
@@ -49,6 +64,10 @@ export async function POST(request: NextRequest) {
     response.cookies.set(SESSION_COOKIE, token, SESSION_COOKIE_OPTIONS);
     return response;
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    const msg = String(err);
+    if (msg.includes("Unauthorized")) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
 }

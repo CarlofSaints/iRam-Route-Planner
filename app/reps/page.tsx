@@ -61,9 +61,50 @@ interface GeocodeResponse {
   outcomes: GeocodeOutcome[];
 }
 
+interface CreateAccountOutcome {
+  repId: string;
+  code: string;
+  name: string;
+  email: string;
+  status: "created" | "created_no_email" | "exists" | "skipped" | "failed";
+  detail: string;
+  tempPassword?: string;
+}
+
+interface CreateAccountResponse {
+  requested: number;
+  created: number;
+  createdNoEmail: number;
+  alreadyExisted: number;
+  skipped: number;
+  failed: number;
+  outcomes: CreateAccountOutcome[];
+}
+
 /** A rep is anchored on their home only when BOTH coordinates are present. */
 function hasHomeGps(rep: Rep): boolean {
   return !!(rep.homeGpsLat || "").trim() && !!(rep.homeGpsLng || "").trim();
+}
+
+/**
+ * Matches the server's check. 17 of the 244 reps have no email at all, and an
+ * account cannot be sent anywhere without one — so the button says why rather
+ * than failing when it is pressed.
+ */
+function looksLikeEmail(value: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((value || "").trim());
+}
+
+/** Sort order for the results list: anything needing a human comes first. */
+function rank(status: CreateAccountOutcome["status"]): number {
+  const order: Record<CreateAccountOutcome["status"], number> = {
+    created_no_email: 0,
+    failed: 1,
+    skipped: 2,
+    exists: 3,
+    created: 4,
+  };
+  return order[status];
 }
 
 export default function RepsPage() {
@@ -84,11 +125,17 @@ export default function RepsPage() {
   const [geocoding, setGeocoding] = useState(false);
   const [geocodeResult, setGeocodeResult] = useState<GeocodeResponse | null>(null);
   const [geocodeError, setGeocodeError] = useState("");
+  const [repsWithLogin, setRepsWithLogin] = useState<Set<string>>(new Set());
+  const [creatingFor, setCreatingFor] = useState<string | null>(null);
+  const [accountResult, setAccountResult] = useState<CreateAccountResponse | null>(null);
+  const [accountError, setAccountError] = useState("");
+  const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const canExport = can("export_data");
   const canImport = can("import_reps");
   const canManageReps = can("manage_reps");
+  const canCreateAccounts = can("create_rep_accounts");
 
   // Reps whose address is captured but whose route still anchors on a store
   // centroid because no coordinate was ever derived from it.
@@ -96,12 +143,31 @@ export default function RepsPage() {
     (r) => (r.homeAddress || "").trim() && !hasHomeGps(r)
   ).length;
 
+  /** Has a usable email and no login yet — the reps the bulk button acts on. */
+  const needsLogin = reps.filter(
+    (r) => looksLikeEmail(r.email || "") && !repsWithLogin.has(r.id)
+  );
+
   const load = () => {
     fetch("/api/reps")
       .then((r) => r.json())
       .then((data) => {
         setReps(data);
         setLoading(false);
+      });
+  };
+
+  const loadAccounts = () => {
+    if (!canCreateAccounts) return;
+    fetch("/api/reps/create-account")
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data.repIdsWithLogin)) {
+          setRepsWithLogin(new Set(data.repIdsWithLogin));
+        }
+      })
+      .catch(() => {
+        /* the column just shows nothing rather than blocking the page */
       });
   };
 
@@ -116,6 +182,78 @@ export default function RepsPage() {
       .then((data) => setTeams(Array.isArray(data) ? data : []))
       .catch(() => setTeams([]));
   }, []);
+
+  // Separate from the load above because `can()` reads the session, which
+  // arrives asynchronously — firing this once on mount would skip it for anyone
+  // whose session hadn't resolved yet, and the Login column would stay blank.
+  useEffect(() => {
+    loadAccounts();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canCreateAccounts]);
+
+  /**
+   * Give reps logins so they can maintain their own home address.
+   *
+   * Sent in chunks: each request mints passwords and sends mail one rep at a
+   * time, so a single call covering 227 people would run past the function's
+   * time budget and past the mail provider's send rate. The chunk size matches
+   * the server's own cap.
+   */
+  const createAccounts = async (targets: Rep[]) => {
+    if (targets.length === 0) return;
+    setAccountError("");
+    setAccountResult(null);
+
+    const CHUNK = 20;
+    const merged: CreateAccountResponse = {
+      requested: 0, created: 0, createdNoEmail: 0, alreadyExisted: 0, skipped: 0, failed: 0, outcomes: [],
+    };
+
+    if (targets.length > CHUNK) setBulkProgress({ done: 0, total: targets.length });
+
+    try {
+      for (let i = 0; i < targets.length; i += CHUNK) {
+        const batch = targets.slice(i, i + CHUNK);
+        const res = await fetch("/api/reps/create-account", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ repIds: batch.map((r) => r.id) }),
+        });
+        const data = await res.json();
+
+        if (!res.ok) {
+          setAccountError(data.error || "Could not create logins");
+          // Whatever succeeded before the failure still happened, so show it
+          // rather than throwing the partial result away.
+          break;
+        }
+
+        merged.requested += data.requested ?? 0;
+        merged.created += data.created ?? 0;
+        merged.createdNoEmail += data.createdNoEmail ?? 0;
+        merged.alreadyExisted += data.alreadyExisted ?? 0;
+        merged.skipped += data.skipped ?? 0;
+        merged.failed += data.failed ?? 0;
+        merged.outcomes.push(...(data.outcomes ?? []));
+
+        if (targets.length > CHUNK) {
+          setBulkProgress({ done: Math.min(i + CHUNK, targets.length), total: targets.length });
+        }
+      }
+    } catch {
+      setAccountError("Network error while creating logins. Some may have been created — reload to check.");
+    } finally {
+      setBulkProgress(null);
+      if (merged.outcomes.length > 0) setAccountResult(merged);
+      loadAccounts();
+    }
+  };
+
+  const createOneAccount = async (rep: Rep) => {
+    setCreatingFor(rep.id);
+    await createAccounts([rep]);
+    setCreatingFor(null);
+  };
 
   /**
    * Assign straight from the row. Dragging reps into team cards is fine for a
@@ -329,6 +467,18 @@ export default function RepsPage() {
               {geocoding ? "Locating..." : `Set Home GPS (${awaitingGeocode})`}
             </button>
           )}
+          {canCreateAccounts && needsLogin.length > 0 && (
+            <button
+              onClick={() => createAccounts(needsLogin)}
+              disabled={!!bulkProgress || !!creatingFor}
+              title="Email each rep a login so they can set their own home address"
+              className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+            >
+              {bulkProgress
+                ? `Creating ${bulkProgress.done}/${bulkProgress.total}...`
+                : `Create Logins (${needsLogin.length})`}
+            </button>
+          )}
           <button
             onClick={() => setShowAdd(true)}
             className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors"
@@ -360,6 +510,81 @@ export default function RepsPage() {
 
       {geocodeError && (
         <div className="p-3 rounded-lg text-sm mb-6 bg-red-50 text-red-700">{geocodeError}</div>
+      )}
+
+      {accountError && (
+        <div className="p-3 rounded-lg text-sm mb-6 bg-red-50 text-red-700">{accountError}</div>
+      )}
+
+      {/* Rep login results. Anything that did NOT get an account has to say so
+          by name — a summary count would quietly hide the reps who were left
+          without one because their email was blank. */}
+      {accountResult && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-6">
+          <div className="flex items-start justify-between gap-4 mb-3">
+            <div>
+              <h3 className="font-semibold text-gray-900 text-sm">
+                Rep logins: {accountResult.created} created and emailed
+                {accountResult.createdNoEmail > 0 && `, ${accountResult.createdNoEmail} created but NOT emailed`}
+                {accountResult.alreadyExisted > 0 && `, ${accountResult.alreadyExisted} already had one`}
+                {accountResult.skipped > 0 && `, ${accountResult.skipped} skipped`}
+                {accountResult.failed > 0 && `, ${accountResult.failed} failed`}
+              </h3>
+              <p className="text-xs text-gray-500 mt-0.5">
+                Each rep was asked to sign in and set their home address. Nothing changes on their routes
+                until they do — and routes must be regenerated afterwards.
+              </p>
+            </div>
+            <button
+              onClick={() => setAccountResult(null)}
+              className="text-xs text-gray-400 hover:text-gray-600 flex-shrink-0"
+            >
+              dismiss
+            </button>
+          </div>
+
+          <div className="max-h-72 overflow-y-auto divide-y divide-gray-50">
+            {accountResult.outcomes
+              // Everything that needs a human sorts to the top; the plain
+              // successes are the ones nobody has to read.
+              .slice()
+              .sort((a, b) => rank(a.status) - rank(b.status))
+              .map((o) => (
+                <div key={`${o.repId}-${o.email}`} className="py-2 text-xs flex items-start gap-3">
+                  <span
+                    className={`mt-0.5 px-1.5 py-0.5 rounded font-medium flex-shrink-0 ${
+                      o.status === "created"
+                        ? "bg-iram-green/10 text-iram-green-dark"
+                        : o.status === "exists"
+                          ? "bg-gray-100 text-gray-500"
+                          : "bg-amber-50 text-amber-700"
+                    }`}
+                  >
+                    {o.status === "created"
+                      ? "emailed"
+                      : o.status === "created_no_email"
+                        ? "no email sent"
+                        : o.status === "exists"
+                          ? "already had one"
+                          : o.status === "skipped"
+                            ? "skipped"
+                            : "failed"}
+                  </span>
+                  <span className="flex-1">
+                    <span className="font-medium text-gray-800">
+                      {o.name} {o.code && <span className="text-gray-400">({o.code})</span>}
+                    </span>
+                    <span className="text-gray-500"> — {o.detail}</span>
+                    {o.tempPassword && (
+                      <span className="block mt-1 font-mono text-[11px] text-gray-800 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                        {o.email} · {o.tempPassword}
+                      </span>
+                    )}
+                  </span>
+                </div>
+              ))}
+          </div>
+        </div>
       )}
 
       {/* Geocoding results. Vague matches are listed rather than saved — a
@@ -495,6 +720,7 @@ export default function RepsPage() {
                 <th className="px-6 py-3">Cell</th>
                 <th className="px-6 py-3">Home Address</th>
                 <th className="px-6 py-3">Starts Day At</th>
+                {canCreateAccounts && <th className="px-6 py-3">Login</th>}
                 <th className="px-6 py-3">Team</th>
                 <th className="px-6 py-3">Visit Role</th>
                 <th className="px-6 py-3 text-center">Hours/Day</th>
@@ -545,6 +771,9 @@ export default function RepsPage() {
                       <td className="px-6 py-3 text-xs text-gray-400 italic">
                         Save, then Set Home GPS
                       </td>
+                      {canCreateAccounts && (
+                        <td className="px-6 py-3 text-xs text-gray-400 italic">Save first</td>
+                      )}
                       <td className="px-6 py-3">
                         <select
                           value={editData.teamId ?? ""}
@@ -629,6 +858,32 @@ export default function RepsPage() {
                           </span>
                         )}
                       </td>
+                      {canCreateAccounts && (
+                        <td className="px-6 py-3 text-xs">
+                          {repsWithLogin.has(rep.id) ? (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded bg-iram-green/10 text-iram-green-dark font-medium">
+                              Has login
+                            </span>
+                          ) : !looksLikeEmail(rep.email || "") ? (
+                            // Says why rather than offering a button that cannot work.
+                            <span
+                              className="text-gray-400"
+                              title="A login is emailed to the rep, so there has to be an address to send it to"
+                            >
+                              No email
+                            </span>
+                          ) : (
+                            <button
+                              onClick={() => createOneAccount(rep)}
+                              disabled={!!creatingFor || !!bulkProgress}
+                              title={`Email ${rep.email} a login so they can set their own home address`}
+                              className="rounded border border-gray-200 px-2 py-1 font-medium text-iram-green transition-colors hover:bg-gray-50 disabled:opacity-50"
+                            >
+                              {creatingFor === rep.id ? "Creating..." : "Create Account"}
+                            </button>
+                          )}
+                        </td>
+                      )}
                       <td className="px-6 py-3">
                         {/* Live dropdown — no need to enter edit mode just to
                             move someone between teams. */}

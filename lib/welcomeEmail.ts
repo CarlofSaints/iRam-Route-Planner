@@ -36,6 +36,12 @@ export interface WelcomeEmailInput {
   password: string;
   /** Whether the recipient will be forced to change it on first sign-in. */
   forcePasswordChange: boolean;
+  /**
+   * Who is being written to. A rep's login exists for one reason — to capture
+   * where they live — so their mail says that instead of describing an app they
+   * cannot otherwise use. Defaults to the original wording.
+   */
+  audience?: "admin" | "rep";
 }
 
 export function resolveAppUrl(): string {
@@ -68,6 +74,44 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
     ? "You'll be asked to choose your own password the first time you sign in."
     : "Please change this to something only you know once you're in.";
 
+  const isRep = input.audience === "rep";
+
+  // A rep has nowhere else to go, so send them straight at their profile. The
+  // middleware redirects them there anyway; landing on it directly just saves
+  // them a hop and matches what the instructions below tell them to open.
+  const signInUrl = isRep ? `${appUrl}/account` : appUrl;
+
+  const headline = isRep ? "Set where your day starts" : "Welcome to the Route Planner";
+  const subhead = isRep ? "It takes about a minute" : "Your account is ready";
+  const buttonLabel = isRep ? "Sign in and set your home address" : "Sign in to iRam Route Planner";
+
+  const intro = isRep
+    ? `An account has been created for you on <strong>iRam Route Planner</strong>, the system that plans your call cycle. ` +
+      `Please sign in and tell us where you live — your route is planned outwards from your home, so the closer it is to ` +
+      `your front door, the less driving you do.`
+    : `An account has been created for you on <strong>iRam Route Planner</strong> — where call cycles, rep journeys and ` +
+      `store allocations are planned. Here are your sign-in details.`;
+
+  // The one instruction that makes the login worth sending at all.
+  const repInstructions = isRep
+    ? `
+            <tr>
+              <td style="padding:24px 32px 0 32px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.greenLighter};border:1px solid ${BRAND.greenLight};border-radius:10px;">
+                  <tr>
+                    <td style="padding:16px 20px 18px 20px;font-family:Helvetica,Arial,sans-serif;font-size:13px;line-height:1.7;color:${BRAND.dark};">
+                      <strong style="font-size:14px;">Once you're signed in</strong><br>
+                      1. Open <strong>Account</strong>.<br>
+                      2. Find <strong>Where your day starts</strong>.<br>
+                      3. Standing at home, tap <strong>Use my current location</strong>.<br>
+                      <span style="color:${BRAND.grey};">That last step is the important one — it pins your home exactly, even if your address is hard to find on a map.</span>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>`
+    : "";
+
   const row = (label: string, value: string, mono = false) => `
               <tr>
                 <td style="padding:10px 0 0 0;font-family:Helvetica,Arial,sans-serif;font-size:11px;font-weight:bold;letter-spacing:.06em;text-transform:uppercase;color:${BRAND.grey};">${label}</td>
@@ -81,11 +125,15 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width,initial-scale=1">
-    <title>Welcome to iRam Route Planner</title>
+    <title>${isRep ? "Set where your day starts" : "Welcome to iRam Route Planner"}</title>
   </head>
   <body style="margin:0;padding:0;background:${BRAND.greenLighter};">
     <!-- preview text, hidden in the body but shown in the inbox list -->
-    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Your iRam Route Planner sign-in details are inside.</div>
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">${
+      isRep
+        ? "Your sign-in details are inside — please tell us where you live."
+        : "Your iRam Route Planner sign-in details are inside."
+    }</div>
     <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.greenLighter};">
       <tr>
         <td align="center" style="padding:32px 12px;">
@@ -100,15 +148,15 @@ export function buildWelcomeEmail(input: WelcomeEmailInput): {
 
             <tr>
               <td style="padding:32px 32px 8px 32px;font-family:Helvetica,Arial,sans-serif;">
-                <h1 style="margin:0 0 6px 0;font-size:22px;line-height:1.3;color:${BRAND.dark};font-weight:bold;">Welcome to the Route Planner</h1>
-                <p style="margin:0;font-size:14px;color:${BRAND.grey};">Your account is ready</p>
+                <h1 style="margin:0 0 6px 0;font-size:22px;line-height:1.3;color:${BRAND.dark};font-weight:bold;">${headline}</h1>
+                <p style="margin:0;font-size:14px;color:${BRAND.grey};">${subhead}</p>
               </td>
             </tr>
 
             <tr>
               <td style="padding:20px 32px 0 32px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:${BRAND.dark};">
                 <p style="margin:0 0 14px 0;">Hi ${name},</p>
-                <p style="margin:0;">An account has been created for you on <strong>iRam Route Planner</strong> — where call cycles, rep journeys and store allocations are planned. Here are your sign-in details.</p>
+                <p style="margin:0;">${intro}</p>
               </td>
             </tr>
 
@@ -132,7 +180,7 @@ ${row("Temporary password", password, true)}
                 <table role="presentation" cellpadding="0" cellspacing="0" border="0">
                   <tr>
                     <td align="center" style="background:${BRAND.green};border-radius:8px;">
-                      <a href="${appUrl}" style="display:inline-block;padding:13px 30px;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;">Sign in to iRam Route Planner</a>
+                      <a href="${signInUrl}" style="display:inline-block;padding:13px 30px;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;">${buttonLabel}</a>
                     </td>
                   </tr>
                 </table>
@@ -142,9 +190,10 @@ ${row("Temporary password", password, true)}
             <tr>
               <td align="center" style="padding:12px 32px 0 32px;font-family:Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.grey};">
                 or paste this into your browser:<br>
-                <a href="${appUrl}" style="color:${BRAND.greenDark};text-decoration:none;">${appUrl}</a>
+                <a href="${signInUrl}" style="color:${BRAND.greenDark};text-decoration:none;">${signInUrl}</a>
               </td>
             </tr>
+${repInstructions}
 
             <tr>
               <td style="padding:24px 32px 0 32px;">
@@ -196,12 +245,25 @@ ${row("Temporary password", password, true)}
   const text = [
     `Hi ${input.name},`,
     ``,
-    `An account has been created for you on iRam Route Planner.`,
+    isRep
+      ? `An account has been created for you on iRam Route Planner, the system that plans your call cycle. Please sign in and tell us where you live — your route is planned outwards from your home, so the closer it is to your front door, the less driving you do.`
+      : `An account has been created for you on iRam Route Planner.`,
     ``,
-    `Sign-in URL: ${appUrl}`,
+    `Sign-in URL: ${signInUrl}`,
     `Email:       ${input.email}`,
     `Password:    ${input.password}`,
     ``,
+    ...(isRep
+      ? [
+          `Once you're signed in:`,
+          `  1. Open Account.`,
+          `  2. Find "Where your day starts".`,
+          `  3. Standing at home, tap "Use my current location".`,
+          ``,
+          `That last step is the important one — it pins your home exactly, even if your address is hard to find on a map.`,
+          ``,
+        ]
+      : []),
     passwordNote,
     `Keep this email private until you have — anyone with the password above can sign in as you.`,
     ``,
@@ -212,7 +274,13 @@ ${row("Temporary password", password, true)}
     `If that wasn't expected, please tell your administrator and don't sign in.`,
   ].join("\n");
 
-  return { subject: "Welcome to iRam Route Planner", html, text };
+  return {
+    subject: isRep
+      ? "Your iRam Route Planner login — please set your home address"
+      : "Welcome to iRam Route Planner",
+    html,
+    text,
+  };
 }
 
 export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<WelcomeEmailResult> {

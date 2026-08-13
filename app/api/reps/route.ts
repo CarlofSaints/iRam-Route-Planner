@@ -1,8 +1,25 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getReps, saveReps } from "@/lib/data";
 import { Rep } from "@/lib/types";
-import { getSession } from "@/lib/auth";
+import { getSession, requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+
+/**
+ * These writes were gated only by the middleware's "is there a valid session",
+ * so any signed-in account could rewrite any rep's email, team, visit role or
+ * home coordinates. That was survivable while every user was an admin; it stops
+ * being survivable the moment reps have logins of their own. The middleware
+ * already refuses a rep everything outside their profile — this is the second
+ * gate, and the one that also covers viewers.
+ */
+function authFailure(err: unknown): NextResponse | null {
+  const text = String(err);
+  if (text.includes("Unauthorized")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  if (text.includes("Forbidden")) {
+    return NextResponse.json({ error: "You do not have permission to change rep records." }, { status: 403 });
+  }
+  return null;
+}
 
 export async function GET() {
   try {
@@ -15,6 +32,7 @@ export async function GET() {
 
 export async function PUT(request: NextRequest) {
   try {
+    await requirePermission("manage_reps");
     const body = await request.json();
     const { id, ...updates } = body as Partial<Rep> & { id: string };
 
@@ -53,12 +71,13 @@ export async function PUT(request: NextRequest) {
 
     return NextResponse.json(reps[idx]);
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
 export async function POST(request: NextRequest) {
   try {
+    await requirePermission("manage_reps");
     const body = await request.json();
     const reps = await getReps();
 
@@ -92,12 +111,13 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json(newRep, { status: 201 });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }
 
 export async function DELETE(request: NextRequest) {
   try {
+    await requirePermission("manage_reps");
     const { id } = await request.json();
     const reps = await getReps();
     const target = reps.find((r) => r.id === id);
@@ -109,6 +129,6 @@ export async function DELETE(request: NextRequest) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
 }

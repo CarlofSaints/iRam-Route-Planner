@@ -356,6 +356,17 @@ export interface User {
   forcePasswordChange: boolean;
   cell?: string;
   profilePicUrl?: string;
+  /**
+   * For rep logins: which Rep record this account maintains.
+   *
+   * The session's repCode is still resolved by matching email at sign-in, which
+   * works right up until someone edits the rep's email on the Reps page — at
+   * which point the login silently stops being attached to anything and the
+   * profile page has nothing to save. Storing the id makes the link survive
+   * that. Absent on every account created before this existed, so readers fall
+   * back to the email match.
+   */
+  repId?: string;
 }
 
 export interface RolePermission {
@@ -370,13 +381,13 @@ export const ROLE_DEFINITIONS: RolePermission[] = [
     role: "superAdmin",
     label: "Super Admin",
     description: "Full unrestricted access",
-    permissions: ["manage_super_admins", "manage_users", "manage_roles", "manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
+    permissions: ["manage_super_admins", "manage_users", "manage_roles", "manage_teams", "manage_reps", "create_rep_accounts", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
   },
   {
     role: "admin",
     label: "Admin",
     description: "Manage reps, stores, channels, and view reports",
-    permissions: ["manage_teams", "manage_reps", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
+    permissions: ["manage_teams", "manage_reps", "create_rep_accounts", "manage_stores", "manage_store_overrides", "manage_channels", "manage_routes", "generate_routes", "import_reps", "manage_call_cycles", "manage_channel_map", "manage_regions", "manage_perigee", "view_dashboard", "view_map", "view_routes", "upload_stores", "upload_data", "export_data"],
   },
   {
     role: "teamManager",
@@ -385,10 +396,16 @@ export const ROLE_DEFINITIONS: RolePermission[] = [
     permissions: ["manage_reps", "manage_stores", "manage_store_overrides", "view_dashboard", "view_map", "view_routes"],
   },
   {
+    // A rep login exists to maintain the rep's OWN profile — above all the home
+    // address the route engine anchors their day on. It grants nothing else, and
+    // the middleware refuses every path outside /account regardless of what this
+    // list says. Do not put view permissions back here expecting them to work:
+    // the views they used to name were filtered in the browser, never on the
+    // server, so they never restricted anything.
     role: "rep",
     label: "Rep",
-    description: "View own routes and store assignments",
-    permissions: ["view_dashboard", "view_map", "view_routes"],
+    description: "Maintain their own profile and home address. No access to routes, stores or reports.",
+    permissions: [],
   },
   {
     role: "viewer",
@@ -412,6 +429,10 @@ export const ALL_PERMISSIONS = [
   { key: "import_reps", label: "Import Rep List" },
   { key: "manage_call_cycles", label: "Manage Call Cycles" },
   { key: "manage_channel_map", label: "Manage Channel Map" },
+  // Deliberately separate from manage_users, which only superAdmins hold. This
+  // one can only ever mint a `rep` login for an existing rep, using that rep's
+  // own email, so it is not a route to creating an admin for yourself.
+  { key: "create_rep_accounts", label: "Create Rep Logins" },
   { key: "manage_regions", label: "Manage Regions" },
   { key: "manage_perigee", label: "Manage Perigee API" },
   { key: "view_dashboard", label: "View Dashboard" },

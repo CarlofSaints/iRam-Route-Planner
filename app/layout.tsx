@@ -58,6 +58,11 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { session } = useSession();
   const isLogin = pathname === "/login";
 
+  // A rep's login exists so they can maintain their own profile. Every other
+  // nav item would 403 or bounce them back here, and a sidebar full of links
+  // that don't work reads as a broken app rather than a deliberate one.
+  const isRep = session?.role === "rep";
+
   // Auto-expand Control Centre if current path matches a child
   const ccChildActive = CONTROL_CENTRE_NAV.some((item) => pathname === item.href);
   const [ccOpen, setCcOpen] = useState(ccChildActive);
@@ -87,6 +92,15 @@ function AppShell({ children }: { children: React.ReactNode }) {
 
         {/* Nav */}
         <nav className="flex-1 py-4 overflow-y-auto">
+          {isRep ? (
+            <NavLink
+              href="/account"
+              label="My Profile"
+              icon="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+              active={pathname === "/account"}
+            />
+          ) : (
+            <>
           {/* Top nav items */}
           {TOP_NAV.map((item) => (
             <NavLink key={item.href} {...item} active={pathname === item.href} />
@@ -129,6 +143,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
               <NavLink key={item.href} {...item} active={pathname === item.href} />
             ))}
           </div>
+            </>
+          )}
         </nav>
 
         {/* User */}

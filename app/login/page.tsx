@@ -13,9 +13,14 @@ export default function LoginPage() {
 
   // Force password change state
   const [showChangePassword, setShowChangePassword] = useState(false);
-  const [userId, setUserId] = useState("");
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+
+  // Where to go once signed in. A rep has no dashboard — the middleware would
+  // bounce them from "/" to their profile, so send them there directly rather
+  // than through a redirect. Held in state because the password-change step
+  // happens after the role is known but before the redirect.
+  const [landing, setLanding] = useState("/");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -32,12 +37,14 @@ export default function LoginPage() {
         setError(data.error || "Login failed");
         return;
       }
+      const destination = data.user?.role === "rep" ? "/account" : "/";
+      setLanding(destination);
+
       if (data.user?.forcePasswordChange) {
-        setUserId(data.user.userId);
         setShowChangePassword(true);
         return;
       }
-      router.push("/");
+      router.push(destination);
     } catch {
       setError("Network error");
     } finally {
@@ -61,14 +68,17 @@ export default function LoginPage() {
       const res = await fetch("/api/auth/change-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId, newPassword }),
+        // No userId: the server takes the account from the session cookie it
+        // already set at sign-in. Sending one used to be how this route chose
+        // whose password to overwrite.
+        body: JSON.stringify({ newPassword }),
       });
       const data = await res.json();
       if (!res.ok) {
         setError(data.error || "Failed to change password");
         return;
       }
-      router.push("/");
+      router.push(landing);
     } catch {
       setError("Network error");
     } finally {
