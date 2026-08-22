@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo, useRef } from "react";
 import { Store, Channel, Rep, Team, VisitRole, FREQUENCY_OPTIONS, FrequencyType, getFrequencyLabel, getVisitRoleName, storeRoleColumns, SA_PROVINCES } from "@/lib/types";
 import { storeRepForRole } from "@/lib/repStores";
 import { useSession } from "@/components/SessionProvider";
+import StoreImportModal from "@/components/StoreImportModal";
 
 const DAYS = ["", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
 const WEEKS = ["", "Wk1", "Wk2", "Wk3", "Wk4", "Wk5"];
@@ -175,6 +176,7 @@ export default function StoresPage() {
   const [saving, setSaving] = useState(false);
   const [regionList, setRegionList] = useState<{ id: string; name: string }[]>([]);
   const [exporting, setExporting] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
 
   const load = () => {
     Promise.all([
@@ -422,12 +424,14 @@ export default function StoresPage() {
           ? activeFilters.map((f) => ["", f])
           : [["", "None — this is every store."]]),
         [],
-        ["Re-uploading this file"],
-        ["", "Store Upload reads PLACE ID, PLACE NAME, CHANNEL, REGION, the three REPRESENTATIVE ID columns, GPS LATITUDE and GPS LONGITUDE. Channel names are matched ignoring case, and a name that matches nothing creates a new channel."],
-        ["", "It does NOT read FREQUENCY, DURATION, DAY, WEEK or PROVINCE — those are set on the Channels page or by editing a store, and a change made in this file will not come back in."],
-        ["", "Correcting the GPS LATITUDE and GPS LONGITUDE columns and re-uploading is the bulk way to fix the stores listed under GPS PROBLEM."],
+        ["Sending this file back"],
+        ["", "Import Excel on the Stores page reads PLACE ID, PLACE NAME, CHANNEL, PROVINCE, REGION, GPS LATITUDE and GPS LONGITUDE — store details only. It never reads a rep, visit role or team column, so the personnel columns can be wrong, or deleted entirely, without any effect. Correcting GPS LATITUDE and GPS LONGITUDE and importing here is the bulk way to fix the stores listed under GPS PROBLEM."],
+        ["", "It updates existing stores only, matched on PLACE ID, and it will not create a channel — a channel name that matches nothing is reported and that store keeps the channel it has. Rows whose PLACE ID is not already in the system are listed back, not created."],
+        ["", "A column you DELETE from this file is left untouched on every store. A column you keep but leave BLANK clears that field, which is how a wrong coordinate is removed in bulk."],
+        ["", "It does NOT read FREQUENCY, DURATION, DAY or WEEK — those come from the Channels page or from editing a store, and a change made in this file will not come back in."],
+        ["", "Store Upload (under Admin) is the other door: use it to ADD stores or to load rep and visit-role assignments. It writes the personnel columns, so only send it a file where those are correct."],
         ["", extraRoles.length
-          ? `There is one ID/NAME column pair per visit role (${extraRoles.map((r) => r.name).join(", ")}). Blanking one removes that rep from that role at that store, because the column is present.`
+          ? `There is one ID/NAME column pair per visit role (${extraRoles.map((r) => r.name).join(", ")}). Those are for Store Upload — on Store Upload, blanking one removes that rep from that role at that store, because the column is present.`
           : "Only the primary visit role exists, so there are no extra rep columns. Create roles under Visit Roles and they appear here."],
       ];
       const notesWs = utils.aoa_to_sheet(notes);
@@ -503,23 +507,41 @@ export default function StoresPage() {
             {filtered.length} of {stores.length} stores
           </p>
         </div>
-        {can("export_data") && (
-          <button
-            onClick={exportExcel}
-            disabled={exporting || filtered.length === 0}
-            title={
-              activeFilters.length
-                ? "Downloads the filtered list you are looking at — the filters are listed on the Notes sheet"
-                : "Downloads every store"
-            }
-            className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
-          >
-            {exporting
-              ? "Building..."
-              : `Export Excel (${filtered.length.toLocaleString("en-ZA")}${activeFilters.length ? " filtered" : ""})`}
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {can("export_data") && (
+            <button
+              onClick={exportExcel}
+              disabled={exporting || filtered.length === 0}
+              title={
+                activeFilters.length
+                  ? "Downloads the filtered list you are looking at — the filters are listed on the Notes sheet"
+                  : "Downloads every store"
+              }
+              className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            >
+              {exporting
+                ? "Building..."
+                : `Export Excel (${filtered.length.toLocaleString("en-ZA")}${activeFilters.length ? " filtered" : ""})`}
+            </button>
+          )}
+          {/* The return leg of the export. Deliberately not a link to Store
+              Upload: that page loads people too, and a file with no rep columns
+              going through it unassigns every store it touches. */}
+          {can("upload_stores") && (
+            <button
+              onClick={() => setImportOpen(true)}
+              title="Send the exported file back after fixing GPS coordinates or store details. Reps and teams are not touched."
+              className="px-4 py-2 bg-iram-green hover:bg-iram-green-dark text-white text-sm font-medium rounded-lg transition-colors"
+            >
+              Import Excel
+            </button>
+          )}
+        </div>
       </div>
+
+      {importOpen && (
+        <StoreImportModal onClose={() => setImportOpen(false)} onImported={load} />
+      )}
 
       {/* Filters */}
       <div className="flex flex-wrap gap-3 mb-4 items-center">
