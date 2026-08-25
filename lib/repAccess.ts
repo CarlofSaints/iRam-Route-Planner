@@ -23,6 +23,10 @@ const REP_ALLOWED = [
   "/api/account", // + /avatar, + /rep-profile
   "/api/auth", // session read, sign out, first-login password change
   "/login",
+  // The guide explains the whole system, including the one page a rep uses. It
+  // reads no data of its own, so there is nothing here to scope, and a rep being
+  // unable to read the instructions for their own screen is a silly line to draw.
+  "/guide",
 ];
 
 /**

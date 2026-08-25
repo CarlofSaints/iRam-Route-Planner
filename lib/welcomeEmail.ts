@@ -283,6 +283,175 @@ ${repInstructions}
   };
 }
 
+export interface PasswordResetEmailInput {
+  name: string;
+  email: string;
+  /** The full link, already carrying the token. */
+  resetUrl: string;
+  expiryMinutes: number;
+}
+
+/**
+ * The "you asked to reset your password" mail.
+ *
+ * It carries a LINK and never a password. It could not carry a password: they
+ * are stored as bcrypt hashes and a hash is one way, so there is nothing to send
+ * even if it were a good idea. The person chooses their own at the other end.
+ *
+ * The logo is grey on transparent, so every panel behind it stays light. A
+ * charcoal header would swallow it.
+ */
+export function buildPasswordResetEmail(input: PasswordResetEmailInput): {
+  subject: string;
+  html: string;
+  text: string;
+} {
+  const appUrl = resolveAppUrl();
+  const name = escapeHtml(input.name);
+  const url = escapeHtml(input.resetUrl);
+  const logoUrl = `${appUrl}/iram-logo.png`;
+
+  const html = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>Reset your iRam Route Planner password</title>
+  </head>
+  <body style="margin:0;padding:0;background:${BRAND.greenLighter};">
+    <div style="display:none;max-height:0;overflow:hidden;opacity:0;">Choose a new password. The link works for ${input.expiryMinutes} minutes.</div>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:${BRAND.greenLighter};">
+      <tr>
+        <td align="center" style="padding:32px 12px;">
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;background:#ffffff;border:1px solid #e6ebe0;border-radius:14px;overflow:hidden;">
+
+            <tr>
+              <td align="center" style="padding:30px 32px 22px 32px;background:#ffffff;">
+                <img src="${logoUrl}" alt="iRam" width="120" style="display:block;border:0;outline:none;text-decoration:none;width:120px;height:auto;">
+              </td>
+            </tr>
+            <tr><td style="height:4px;line-height:4px;font-size:0;background:${BRAND.green};">&nbsp;</td></tr>
+
+            <tr>
+              <td style="padding:32px 32px 8px 32px;font-family:Helvetica,Arial,sans-serif;">
+                <h1 style="margin:0 0 6px 0;font-size:22px;line-height:1.3;color:${BRAND.dark};font-weight:bold;">Choose a new password</h1>
+                <p style="margin:0;font-size:14px;color:${BRAND.grey};">The link below works for ${input.expiryMinutes} minutes</p>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:20px 32px 0 32px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:${BRAND.dark};">
+                <p style="margin:0 0 14px 0;">Hi ${name},</p>
+                <p style="margin:0;">Somebody asked to reset the password on your <strong>iRam Route Planner</strong> account. Tap the button to choose a new one.</p>
+              </td>
+            </tr>
+
+            <tr>
+              <td align="center" style="padding:26px 32px 6px 32px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" border="0">
+                  <tr>
+                    <td align="center" style="background:${BRAND.green};border-radius:8px;">
+                      <a href="${url}" style="display:inline-block;padding:13px 30px;font-family:Helvetica,Arial,sans-serif;font-size:15px;font-weight:bold;color:#ffffff;text-decoration:none;">Choose a new password</a>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td align="center" style="padding:12px 32px 0 32px;font-family:Helvetica,Arial,sans-serif;font-size:12px;color:${BRAND.grey};">
+                or paste this into your browser:<br>
+                <a href="${url}" style="color:${BRAND.greenDark};text-decoration:none;word-break:break-all;">${url}</a>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:24px 32px 0 32px;">
+                <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-left:3px solid ${BRAND.green};">
+                  <tr>
+                    <td style="padding:2px 0 2px 14px;font-family:Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.dark};">
+                      If this was not you, you can ignore this email: nothing changes until somebody opens the link and sets a new password. The link stops working once it has been used.
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+
+            <tr>
+              <td style="padding:28px 32px 26px 32px;font-family:Helvetica,Arial,sans-serif;font-size:15px;line-height:1.6;color:${BRAND.dark};">
+                <p style="margin:0;">Regards,<br><strong>The iRam Team</strong></p>
+              </td>
+            </tr>
+
+          </table>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="max-width:560px;">
+            <tr>
+              <td align="center" style="padding:16px 12px 0 12px;font-family:Helvetica,Arial,sans-serif;font-size:11px;color:${BRAND.grey};">
+                iRam Route Planner &middot; Powered by OuterJoin
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>`;
+
+  const text = [
+    `Hi ${input.name},`,
+    ``,
+    `Somebody asked to reset the password on your iRam Route Planner account.`,
+    `Open this link to choose a new one. It works for ${input.expiryMinutes} minutes:`,
+    ``,
+    input.resetUrl,
+    ``,
+    `If this was not you, you can ignore this email. Nothing changes until somebody`,
+    `opens the link and sets a new password, and the link stops working once used.`,
+    ``,
+    `Regards,`,
+    `The iRam Team`,
+  ].join("\n");
+
+  return { subject: "Reset your iRam Route Planner password", html, text };
+}
+
+export async function sendPasswordResetEmail(
+  input: PasswordResetEmailInput
+): Promise<WelcomeEmailResult> {
+  const resendKey = process.env.RESEND_API_KEY;
+  if (!resendKey) {
+    return { sent: false, configured: false, reason: "No RESEND_API_KEY configured." };
+  }
+  const { subject, html, text } = buildPasswordResetEmail(input);
+  try {
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        from: process.env.RESEND_FROM || "iRam <onboarding@resend.dev>",
+        to: input.email,
+        // The From address belongs to whichever domain is verified with the ESP,
+        // which is not necessarily a mailbox anyone reads. Without this a rep who
+        // hits Reply is writing into the void.
+        ...(process.env.RESEND_REPLY_TO ? { reply_to: process.env.RESEND_REPLY_TO } : {}),
+        subject,
+        html,
+        text,
+      }),
+    });
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      console.error("Resend API error:", res.status, errData);
+      const detail = errData?.message || errData?.error || "Unknown error";
+      return { sent: false, configured: true, reason: `Email failed (${res.status}): ${detail}` };
+    }
+    return { sent: true };
+  } catch (err) {
+    console.error("Resend request failed:", err);
+    return { sent: false, configured: true, reason: `Email request failed: ${String(err)}` };
+  }
+}
+
 export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<WelcomeEmailResult> {
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {
@@ -301,6 +470,7 @@ export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<Welcom
       body: JSON.stringify({
         from: process.env.RESEND_FROM || "iRam <onboarding@resend.dev>",
         to: input.email,
+        ...(process.env.RESEND_REPLY_TO ? { reply_to: process.env.RESEND_REPLY_TO } : {}),
         subject,
         html,
         text,

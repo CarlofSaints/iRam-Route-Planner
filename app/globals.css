@@ -40,3 +40,95 @@ body {
 .leaflet-popup-content p {
   margin: 0;
 }
+
+/* ── The guide in print ──────────────────────────────────────────────────
+   "Download PDF" is the browser's own print-to-PDF against these rules, so
+   there is one document rather than a screen version and a paper copy that
+   drift apart. Everything that is chrome on screen has to disappear here,
+   and every block that would read badly split across a page break says so
+   for itself with break-inside-avoid. */
+
+.guide-hide-screen {
+  display: none;
+}
+
+@media print {
+  /* The app shell is navigation. On paper it is a black stripe down the
+     left of every page. */
+  aside,
+  .guide-hide-print {
+    display: none !important;
+  }
+
+  main {
+    overflow: visible !important;
+  }
+
+  html,
+  body {
+    height: auto !important;
+    overflow: visible !important;
+    background: #fff !important;
+  }
+
+  .guide-hide-screen {
+    display: block;
+  }
+
+  .guide-root {
+    max-width: none !important;
+    padding: 0 !important;
+  }
+
+  /* Browsers strip backgrounds by default, which would flatten every callout
+     and diagram into unlabelled grey. */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* A section starting three lines from the foot of a page is unreadable. */
+  .guide-section {
+    break-before: page;
+    page-break-before: always;
+  }
+
+  .guide-section:first-of-type {
+    break-before: auto;
+    page-break-before: auto;
+  }
+
+  .guide-toc {
+    break-after: page;
+    page-break-after: always;
+  }
+
+  h1,
+  h2 {
+    break-after: avoid;
+    page-break-after: avoid;
+  }
+
+  figure,
+  table,
+  .break-inside-avoid {
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  a[href^="#"] {
+    text-decoration: none;
+    color: inherit;
+  }
+
+  /* A screenshot is a button on screen so it can be enlarged. On paper there
+     is nothing to click, so it should read as a plain picture. */
+  .guide-shot {
+    box-shadow: none !important;
+  }
+}
+
+@page {
+  size: A4;
+  margin: 14mm 12mm;
+}

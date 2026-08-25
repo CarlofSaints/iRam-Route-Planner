@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { verifyToken, sessionSecret } from "@/lib/sessionToken";
 import { isRepAllowedPath } from "@/lib/repAccess";
+import { isPublicPath, isPublicPrefix } from "@/lib/publicPaths";
 import type { SessionPayload } from "@/lib/types";
 
 // /sso/callback is public by necessity: it is the route that CREATES the session,
@@ -15,11 +16,12 @@ import type { SessionPayload } from "@/lib/types";
 // which took a userId from the request body, set that user's password and
 // returned a signed session cookie for them. A public path must be the ONE route
 // that is public, not everything filed beneath it.
-const PUBLIC_EXACT = ["/login", "/api/auth", "/sso/callback"];
+// The list itself lives in lib/publicPaths so a test can assert against the real
+// thing rather than a copy that quietly drifts.
 
 // /api/cron is a prefix because Vercel's scheduler hits several routes under it
 // without a session cookie. Each one authenticates via CRON_SECRET itself.
-const PUBLIC_PREFIXES = ["/api/cron"];
+
 
 // Bootstrapping a brand-new deploy is a chicken-and-egg problem: /api/seed
 // creates the first admin, so there is no session cookie to present yet. Rather
@@ -33,8 +35,8 @@ export async function middleware(request: NextRequest) {
 
   // Allow public paths and static assets
   if (
-    PUBLIC_EXACT.includes(pathname) ||
-    PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`)) ||
+    isPublicPath(pathname) ||
+    isPublicPrefix(pathname) ||
     pathname.startsWith("/_next") ||
     pathname.startsWith("/favicon") ||
     pathname.match(/\.(jpg|png|svg|ico|css|js)$/)

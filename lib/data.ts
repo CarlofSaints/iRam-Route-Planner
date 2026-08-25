@@ -1,5 +1,6 @@
 import { put, list, get } from "@vercel/blob";
 import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
+import type { PasswordResetRecord } from "./passwordReset";
 import fs from "fs";
 import path from "path";
 
@@ -173,6 +174,16 @@ export async function getUsers(): Promise<User[]> {
 
 export async function saveUsers(users: User[]): Promise<void> {
   await writeJSON("users", users);
+}
+
+// ---------- Password resets ----------
+
+export async function getPasswordResets(): Promise<PasswordResetRecord[]> {
+  return readJSON<PasswordResetRecord[]>("password-resets", []);
+}
+
+export async function savePasswordResets(records: PasswordResetRecord[]): Promise<void> {
+  await writeJSON("password-resets", records);
 }
 
 // ---------- Teams ----------

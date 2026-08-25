@@ -1,17 +1,25 @@
 "use client";
 
-import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { Suspense, useEffect, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
+  const params = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
 
   // Force password change state
+  // Arriving from a completed reset: prefill the address so the only thing left
+  // to type is the password they just chose.
+  useEffect(() => {
+    const fromReset = params.get("email");
+    if (fromReset) setEmail(fromReset);
+  }, [params]);
+
   const [showChangePassword, setShowChangePassword] = useState(false);
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -166,6 +174,12 @@ export default function LoginPage() {
             >
               {loading ? "Signing in..." : "Sign In"}
             </button>
+            <a
+              href="/forgot-password"
+              className="block text-center text-xs text-gray-500 hover:text-iram-green transition-colors"
+            >
+              Forgot your password?
+            </a>
           </form>
         )}
 
@@ -176,5 +190,17 @@ export default function LoginPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+/**
+ * useSearchParams needs a Suspense boundary, or this whole route opts out of
+ * static rendering and the build says so.
+ */
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }
