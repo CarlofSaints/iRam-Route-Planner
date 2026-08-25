@@ -241,13 +241,20 @@ export default function StoreUploadPage() {
           <span>GPS LATITUDE</span>
           <span>GPS LONGITUDE</span>
           <span>MONTHLY AVERAGE / VALUE</span>
-          <span>SECONDARY REPRESENTATIVE ID (optional)</span>
-          <span>THIRD REPRESENTATIVE ID (optional)</span>
           <span>REGION / PROVINCE / AREA (optional)</span>
+          <span className="text-gray-400">SECONDARY / THIRD REPRESENTATIVE ID (old files only)</span>
         </div>
-        <p className="text-[11px] text-gray-400 mt-3">
-          Grab a pre-formatted file with Export Template above. Secondary and third reps are stored
-          against the store, but routes, capacity and the map still use the primary rep only.
+        <p className="text-[11px] text-gray-500 mt-3">
+          Every visit role other than the sales rep has its OWN pair of columns, named after the
+          role: for example <span className="font-medium">Team Leader ID</span> and{" "}
+          <span className="font-medium">Team Leader Name</span>. Add or rename a role on{" "}
+          <a href="/visit-roles" className="text-iram-green hover:underline">Visit Roles</a> and those
+          column names change with it.
+        </p>
+        <p className="text-[11px] text-gray-400 mt-2">
+          Grab a pre-formatted file with Export Template above: it already carries a pair for every
+          role you have. The old SECONDARY and THIRD columns are still read so existing files keep
+          working, but they cannot say WHICH role they are for, so use the named pairs.
         </p>
       </div>
     </div>

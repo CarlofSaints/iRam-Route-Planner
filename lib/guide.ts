@@ -109,8 +109,8 @@ export const GUIDE: GuideSection[] = [
       {
         kind: "shot",
         slot: "channels-grid",
-        caption: "The Channels page, with frequency and duration per channel",
-        capture: "Control Centre → Channels, full page, showing the grid and the Apply defaults button",
+        caption: "The Channels page: a column group per visit role, each with its own switch, frequency and duration",
+        capture: "Control Centre → Channels, showing the per-role column groups with their switches, frequencies and durations",
       },
       {
         kind: "note",
@@ -169,8 +169,8 @@ export const GUIDE: GuideSection[] = [
       {
         kind: "shot",
         slot: "reps-import",
-        caption: "The import preview, before anything is saved",
-        capture: "Reps page after choosing a file: the preview panel showing created, updated and unchanged counts",
+        caption: "The Reps page: import, home GPS, and who has a login",
+        capture: "Reps page showing Import Reps, Set Home GPS, Create Logins, and the Starts Day At and Login columns",
       },
       {
         kind: "note",
@@ -282,9 +282,10 @@ export const GUIDE: GuideSection[] = [
         kind: "table",
         head: ["", "The primary role", "Every other role"],
         rows: [
-          ["Who it is", "The sales rep", "QC, Training, or any role you add"],
+          ["Who it is", "The sales rep", "Team Leader, Roaming Merchandiser, RVL Rep, QC, or any role you add"],
           ["Set on the store by", "REPRESENTATIVE ID", "That role's own column pair"],
-          ["How often, and how long", "From the store, which inherits it from its channel", "From the role itself"],
+          ["How often, and how long", "From the store, which inherits it from its channel", "From the channel's setting for that role, falling back to the role's own"],
+          ["Can be switched off per channel", "No, the sales rep calls on every allocated store", "Yes. A role can be set not to call on a channel at all"],
           ["Counts toward capacity", "Yes", "Yes, for the person doing it"],
           ["Flagged when far from their area", "Yes", "Only if you switch it on for that role"],
         ],
@@ -292,28 +293,34 @@ export const GUIDE: GuideSection[] = [
       {
         kind: "note",
         tone: "info",
-        title: "Why the primary role takes its rhythm from the store and the others do not",
-        text: "A sales call happens as often as that TYPE of store needs calling on, which is a property of the channel: a Spar is not visited at the same rate as a forecourt. A QC visit happens as often as QC needs doing, which is a property of the job, not of the shop. So the primary role reads the store and every other role reads itself.",
+        title: "Where each number comes from, in order",
+        text: "For a non-primary role the system looks at the channel first: if that channel has a setting for that role, it wins. If it does not, the role's own frequency and duration are used. And if the channel has that role switched off, the role does not call on that channel at all, however many stores it is named on. That is why the Channels grid has a column group per role, each with a switch, a frequency and a duration.",
+      },
+      {
+        kind: "note",
+        tone: "info",
+        title: "Why the sales rep is handled differently from everyone else",
+        text: "The primary role's frequency and duration are written ONTO each store, because that is what the route engine reads. Every other role is worked out when the plan is built, from the channel and the role. That is why applying channel defaults changes store records for the sales rep and changes nothing visible for the other roles: theirs was never stored on the store in the first place.",
       },
       {
         kind: "steps",
         items: [
-          { do: "Open Control Centre → Visit Roles", detail: "Each role carries how often it calls and how many minutes it takes." },
-          { do: "Decide whether that role should be checked for out-of-range stores", detail: "A role covering a whole province would otherwise be flagged on nearly every store, which is why it is off by default for those." },
-          { do: "Put the person's rep code in that role's column on the store", detail: "Through Store Upload, each role has its own ID and NAME column pair. A store with nothing in a role's column simply is not visited by that role." },
+          { do: "Open Control Centre → Visit Roles", detail: "Each role carries the frequency and duration it falls back on, and whether it should be checked for out-of-range stores." },
+          { do: "Then open Channels and set that role per channel", detail: "Each role gets a column group: a switch for whether it calls on that channel at all, and its own frequency and duration when it does. A QC call on a Makro is not the same length as a QC call on a corner shop." },
+          { do: "Put the person's rep code in that role's column on the store", detail: "Through Store Upload, each role has its own ID and NAME column pair. A store with nothing in a role's column is simply not visited by that role." },
         ],
       },
       {
         kind: "note",
         tone: "warn",
-        title: "Adding a role adds columns to Store Upload",
-        text: "Each visit role gets its own pair of columns in the upload, named after the role. Add a role and the file gains a column pair; rename a role and the column names change with it. If a store's role column is blank, that role does not visit it, which is different from the role having no rep.",
+        title: "Adding a role adds columns in two places",
+        text: "Each visit role gets its own pair of columns in Store Upload, named after the role, and its own column group on the Channels page. Add a role and both gain columns; rename a role and both change with it. If a store's role column is blank, that role does not visit that store, which is a different thing from the role being switched off for the whole channel.",
       },
       {
         kind: "shot",
         slot: "visit-roles",
         caption: "Visit Roles: each kind of visit, with its own rhythm",
-        capture: "Control Centre → Visit Roles, showing the roles with their frequency, duration and out-of-range setting",
+        capture: "Control Centre → Visit Roles, showing each role with its fallback frequency, duration and out-of-range setting",
       },
     ],
   },
