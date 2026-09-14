@@ -95,16 +95,28 @@ console.log("\n--- what a link will and will not open ---\n");
   ok("presenting the stored HASH as if it were the token does not work", !fromStoredHash.ok);
 }
 
-console.log("\n--- one live link per account ---\n");
+console.log("\n--- asking more than once ---\n");
 
 {
+  // The route appends a new record and leaves the earlier ones alone. A slow
+  // email must not arrive holding a dead link: the live log showed reps asking
+  // three times before one worked.
   const t1 = generateResetToken();
   const t2 = generateResetToken();
+  const t3 = generateResetToken();
   let records: PasswordResetRecord[] = [buildResetRecord("u1", "a@b.com", t1, NOW)];
-  records = [...invalidateFor(records, "u1", later(2)), buildResetRecord("u1", "a@b.com", t2, later(2))];
+  records = [...records, buildResetRecord("u1", "a@b.com", t2, later(2))];
+  records = [...records, buildResetRecord("u2", "other@b.com", t3, later(2))];
 
-  ok("asking again retires the earlier link", !findResetRecord(records, t1, later(3)).ok);
-  ok("the newest link works", findResetRecord(records, t2, later(3)).ok);
+  ok("asking again leaves the EARLIER link working", findResetRecord(records, t1, later(3)).ok);
+  ok("...and the newer one works too", findResetRecord(records, t2, later(3)).ok);
+
+  // What reset-password does once a link is used.
+  const afterReset = invalidateFor(records, "u1", later(4));
+  const other = findResetRecord(afterReset, t2, later(5));
+  eq("using a link retires every other link that person has", other.ok ? "accepted" : other.reason, "used");
+  ok("...including the one they clicked", !findResetRecord(afterReset, t1, later(5)).ok);
+  ok("...but never someone else's", findResetRecord(afterReset, t3, later(5)).ok);
 }
 
 {

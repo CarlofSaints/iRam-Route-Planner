@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getUsers, saveUsers, getPasswordResets, savePasswordResets } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
-import { findResetRecord, passwordProblem, pruneResets } from "@/lib/passwordReset";
+import { findResetRecord, invalidateFor, passwordProblem, pruneResets } from "@/lib/passwordReset";
 import bcrypt from "bcryptjs";
 
 /**
@@ -20,7 +20,8 @@ import bcrypt from "bcryptjs";
  * GET  ?token=...  checks a link without spending it, so the page can say "this
  *                  link has expired" before the person types a new password
  *                  twice.
- * POST { token, password }  sets the password and retires the link.
+ * POST { token, password }  sets the password and retires this link AND every
+ *                  other unused link the person asked for.
  */
 
 /** One message for every failure. Which one it was is the holder's business, not ours. */
@@ -77,14 +78,11 @@ export async function POST(request: NextRequest) {
     users[idx].forcePasswordChange = false;
     await saveUsers(users);
 
-    // Spend the link only AFTER the password is safely saved. The other order
+    // Spend the links only AFTER the password is safely saved. The other order
     // burns the link on a failed write and strands them.
-    const spent = pruneResets(
-      records.map((r) =>
-        r.tokenHash === lookup.record.tokenHash ? { ...r, usedAt: now.toISOString() } : r
-      ),
-      now
-    );
+    // ALL of this person's unused links go, not just the one clicked: asking
+    // again no longer cancels earlier links, so this is the moment they die.
+    const spent = pruneResets(invalidateFor(records, lookup.record.userId, now), now);
     await savePasswordResets(spent);
 
     logActivity({

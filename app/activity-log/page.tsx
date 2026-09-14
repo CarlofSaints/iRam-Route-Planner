@@ -16,6 +16,8 @@ interface LogEntry {
 type SortKey = "timestamp" | "actorName" | "action" | "summary";
 type SortDir = "asc" | "desc";
 
+const ROWS_PER_PAGE = 500;
+
 export default function ActivityLogPage() {
   const { session } = useSession();
   const [entries, setEntries] = useState<LogEntry[]>([]);
@@ -27,6 +29,9 @@ export default function ActivityLogPage() {
   const [search, setSearch] = useState("");
   const [sortKey, setSortKey] = useState<SortKey>("timestamp");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  // A month can now hold 5 000 entries. Count them all, draw them in pages.
+  const [shown, setShown] = useState(ROWS_PER_PAGE);
+  useEffect(() => setShown(ROWS_PER_PAGE), [month, search, sortKey, sortDir]);
 
   useEffect(() => {
     if (!session) return;
@@ -176,7 +181,7 @@ export default function ActivityLogPage() {
                 </tr>
               </thead>
               <tbody>
-                {sorted.map((e) => (
+                {sorted.slice(0, shown).map((e) => (
                   <tr key={e.id} className="border-b border-gray-100 hover:bg-gray-50/50">
                     <td className="px-4 py-2.5 text-gray-500 whitespace-nowrap text-xs">
                       {formatTime(e.timestamp)}
@@ -196,6 +201,17 @@ export default function ActivityLogPage() {
               </tbody>
             </table>
           </div>
+          {sorted.length > shown && (
+            <div className="flex items-center justify-center gap-3 border-t border-gray-100 py-3 text-xs text-gray-500">
+              Showing {shown} of {sorted.length}
+              <button
+                onClick={() => setShown((n) => n + ROWS_PER_PAGE)}
+                className="rounded-lg border border-gray-200 px-3 py-1.5 font-medium text-gray-700 hover:bg-gray-50"
+              >
+                Show {Math.min(ROWS_PER_PAGE, sorted.length - shown)} more
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

@@ -3,6 +3,7 @@ import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { encodeSession, requireSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload } from "@/lib/types";
+import { passwordProblem } from "@/lib/passwordRules";
 import bcrypt from "bcryptjs";
 
 /**
@@ -22,9 +23,10 @@ export async function POST(request: NextRequest) {
     // sets one on valid credentials even when forcePasswordChange is true.
     const current = await requireSession();
     const { newPassword } = await request.json();
-    if (!newPassword || newPassword.length < 6) {
-      return NextResponse.json({ error: "Password must be at least 6 characters" }, { status: 400 });
-    }
+    // The same rule as a reset link. This was "at least 6", so a rep could
+    // choose a password here that the reset page would later refuse.
+    const problem = passwordProblem(String(newPassword || ""));
+    if (problem) return NextResponse.json({ error: problem }, { status: 400 });
 
     const users = await getUsers();
     // Deliberately the SESSION's user, never an id supplied by the caller.

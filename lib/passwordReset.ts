@@ -18,8 +18,11 @@ import crypto from "crypto";
  *   more code than writes it.
  * - Tokens are single use and expire in an hour. A reset link sitting in an
  *   inbox forever is a spare key under the mat.
- * - Issuing a new one invalidates that user's earlier ones, so a link the person
- *   already forgot about cannot be used later.
+ * - Asking again does NOT cancel the earlier links. It used to, and in the field
+ *   that meant a slow email arrived holding a link that was already dead: the
+ *   live log shows reps asking three times before one worked. Instead, the
+ *   moment ANY of a person's links is used, all their others are retired, so a
+ *   link they forgot about still cannot be used after they have reset.
  * - Nothing here ever emails a password. It cannot: passwords are stored as
  *   bcrypt hashes and a hash is one way. The link is what gets sent, and the
  *   person chooses their own password at the end of it.
@@ -109,18 +112,12 @@ export function isThrottled(records: PasswordResetRecord[], email: string, now: 
   );
 }
 
-/** Retire every unused link this account already has. */
+/** Retire every unused link this account has. Called once one of them has been used. */
 export function invalidateFor(records: PasswordResetRecord[], userId: string, now: Date): PasswordResetRecord[] {
   return records.map((r) =>
     r.userId === userId && !r.usedAt ? { ...r, usedAt: now.toISOString() } : r
   );
 }
 
-/** A password the app will accept. Kept in one place so every screen agrees. */
-export function passwordProblem(password: string): string | null {
-  if (!password || password.length < 8) return "Use at least 8 characters.";
-  if (password.length > 200) return "That is too long.";
-  if (!/[a-zA-Z]/.test(password)) return "Include at least one letter.";
-  if (!/[0-9]/.test(password)) return "Include at least one number.";
-  return null;
-}
+/** Re-exported so existing imports keep working. The rule itself lives in lib/passwordRules.ts. */
+export { passwordProblem } from "./passwordRules";

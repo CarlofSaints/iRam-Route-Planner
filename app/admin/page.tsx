@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { UserRole, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS } from "@/lib/types";
+import { passwordProblem, PASSWORD_HINT } from "@/lib/passwordRules";
 
 interface UserData {
   id: string;
@@ -169,6 +170,11 @@ export default function AdminPage() {
       showMsg("All fields required", "error");
       return;
     }
+    const createProblem = passwordProblem(newUser.password);
+    if (createProblem) {
+      showMsg(`Password: ${createProblem}`, "error");
+      return;
+    }
     setSaving(true);
     const res = await fetch("/api/users", {
       method: "POST",
@@ -279,8 +285,9 @@ export default function AdminPage() {
 
   const submitSetPw = async () => {
     if (!setPwUser) return;
-    if (setPwValue.length < 6) {
-      showMsg("Password must be at least 6 characters", "error");
+    const setProblem = passwordProblem(setPwValue);
+    if (setProblem) {
+      showMsg(`Password: ${setProblem}`, "error");
       return;
     }
     if (setPwValue !== setPwConfirm) {
@@ -369,7 +376,7 @@ export default function AdminPage() {
                     type={setPwVisible ? "text" : "password"}
                     value={setPwValue}
                     onChange={(e) => setSetPwValue(e.target.value)}
-                    placeholder="Min 6 characters"
+                    placeholder={PASSWORD_HINT}
                     className="w-full border border-gray-200 rounded-lg px-3 py-2 pr-10 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
                     autoFocus
                   />
@@ -441,7 +448,7 @@ export default function AdminPage() {
               </button>
               <button
                 onClick={submitSetPw}
-                disabled={setPwSaving || setPwValue.length < 6 || setPwValue !== setPwConfirm}
+                disabled={setPwSaving || !!passwordProblem(setPwValue) || setPwValue !== setPwConfirm}
                 className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark disabled:opacity-50"
               >
                 {setPwSaving ? "Saving..." : "Set Password"}
@@ -481,6 +488,7 @@ export default function AdminPage() {
                 onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
               />
+              <p className="mt-1 text-[11px] text-gray-500">{PASSWORD_HINT}</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Role</label>

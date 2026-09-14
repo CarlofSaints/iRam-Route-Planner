@@ -4,6 +4,7 @@ import { User, UserRole } from "@/lib/types";
 import { requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { sendWelcomeEmail } from "@/lib/welcomeEmail";
+import { passwordProblem } from "@/lib/passwordRules";
 import bcrypt from "bcryptjs";
 
 const SUPER_ADMIN_FORBIDDEN = { error: "Only Super Admins can add, edit, or remove Super Admin users" };
@@ -43,6 +44,8 @@ export async function POST(request: NextRequest) {
     if (!name || !email || !password) {
       return NextResponse.json({ error: "Name, email and password required" }, { status: 400 });
     }
+    const createProblem = passwordProblem(String(password));
+    if (createProblem) return NextResponse.json({ error: `Password: ${createProblem}` }, { status: 400 });
 
     const users = await getUsers();
     if (users.find((u) => u.email.toLowerCase() === email.toLowerCase())) {
@@ -105,6 +108,11 @@ export async function PUT(request: NextRequest) {
     if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
     const targetUser = users[idx];
+
+    if (password) {
+      const setProblem = passwordProblem(String(password));
+      if (setProblem) return NextResponse.json({ error: `Password: ${setProblem}` }, { status: 400 });
+    }
 
     // Only superAdmins can edit superAdmin users or promote someone to superAdmin
     if ((targetUser.role === "superAdmin" || role === "superAdmin") && session?.role !== "superAdmin") {

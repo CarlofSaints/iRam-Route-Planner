@@ -3,6 +3,7 @@ import { requireSession, encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS }
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { resolveManager } from "@/lib/manager";
 import { SessionPayload } from "@/lib/types";
+import { passwordProblem } from "@/lib/passwordRules";
 import bcrypt from "bcryptjs";
 
 export async function GET() {
@@ -46,9 +47,8 @@ export async function PUT(request: NextRequest) {
       if (!valid) {
         return NextResponse.json({ error: "Current password is incorrect" }, { status: 400 });
       }
-      if (newPassword.length < 6) {
-        return NextResponse.json({ error: "New password must be at least 6 characters" }, { status: 400 });
-      }
+      const problem = passwordProblem(String(newPassword));
+      if (problem) return NextResponse.json({ error: problem }, { status: 400 });
       users[idx].password = await bcrypt.hash(newPassword, 10);
     }
 

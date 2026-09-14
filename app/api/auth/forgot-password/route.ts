@@ -5,7 +5,6 @@ import { logActivity } from "@/lib/activityLog";
 import {
   buildResetRecord,
   generateResetToken,
-  invalidateFor,
   isThrottled,
   pruneResets,
   RESET_TTL_MINUTES,
@@ -24,8 +23,9 @@ import {
  *    try passwords against it.
  * 2. What it emails is a LINK, never a password. It could not email a password
  *    if it wanted to: they are bcrypt hashes and a hash is one way.
- * 3. One link per account per minute, and issuing a new one retires that
- *    account's earlier links.
+ * 3. One link per account per minute. Asking again leaves the earlier links
+ *    working, because the first email is often the one that arrives late; the
+ *    reset route retires all of them once any one is used.
  */
 
 export const maxDuration = 30;
@@ -66,10 +66,9 @@ export async function POST(request: NextRequest) {
     const token = generateResetToken();
     const record = buildResetRecord(user.id, user.email, token, now);
 
-    // Retire this user's older links BEFORE adding the new one, so exactly one
-    // is live at a time.
-    const next = [...invalidateFor(existing, user.id, now), record];
-    await savePasswordResets(next);
+    // Earlier links are deliberately left live. Retiring them here meant a slow
+    // email arrived already dead, and people asked three times before one worked.
+    await savePasswordResets([...existing, record]);
 
     const resetUrl = `${resolveAppUrl()}/reset-password?token=${encodeURIComponent(token)}`;
     const result = await sendPasswordResetEmail({

@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { ManagerInfo } from "@/lib/manager";
+import { passwordProblem, PASSWORD_HINT } from "@/lib/passwordRules";
 
 interface ProfileUser {
   id: string;
@@ -203,8 +204,9 @@ export default function AccountPage() {
       setPwMessage("Passwords do not match");
       return;
     }
-    if (newPw.length < 6) {
-      setPwMessage("Password must be at least 6 characters");
+    const problem = passwordProblem(newPw);
+    if (problem) {
+      setPwMessage(problem);
       return;
     }
     setPwSaving(true);
@@ -497,6 +499,7 @@ export default function AccountPage() {
               onChange={(e) => setNewPw(e.target.value)}
               className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
             />
+            <p className="mt-1 text-[11px] text-gray-500">{PASSWORD_HINT}</p>
           </div>
           <div>
             <label className="block text-xs text-gray-500 mb-1">Confirm New Password</label>

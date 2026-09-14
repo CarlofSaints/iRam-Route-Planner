@@ -3,6 +3,7 @@
 import { Suspense, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Image from "next/image";
+import { passwordProblem, PASSWORD_HINT } from "@/lib/passwordRules";
 
 function LoginForm() {
   const router = useRouter();
@@ -63,8 +64,9 @@ function LoginForm() {
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     setError("");
-    if (newPassword.length < 6) {
-      setError("Password must be at least 6 characters");
+    const problem = passwordProblem(newPassword);
+    if (problem) {
+      setError(problem);
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -117,9 +119,9 @@ function LoginForm() {
                 value={newPassword}
                 onChange={(e) => setNewPassword(e.target.value)}
                 className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-iram-green"
-                placeholder="Min 6 characters"
                 required
               />
+              <p className="mt-1 text-[11px] text-gray-500">{PASSWORD_HINT}</p>
             </div>
             <div>
               <label className="block text-xs font-medium text-gray-600 mb-1">Confirm Password</label>

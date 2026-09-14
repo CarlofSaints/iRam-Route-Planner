@@ -5,7 +5,12 @@ import path from "path";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const useBlob = !!process.env.BLOB_READ_WRITE_TOKEN;
-const MAX_ENTRIES = 500;
+// Per month. Was 500, and August 2026 hit it by the 26th: creating 227 rep
+// logins wrote 227 entries in two minutes, and everything older that month was
+// silently dropped. 5 000 is ten times the old cap and roughly 1.5 MB of JSON.
+// ⚠️ Not much higher: /api/logs returns the whole month in one response, and a
+// Vercel function response is capped at about 4.5 MB.
+const MAX_ENTRIES = 5_000;
 
 export interface ActivityLogEntry {
   id: string;
@@ -51,7 +56,9 @@ async function readLog(month: string): Promise<ActivityLogEntry[]> {
 
 async function writeLog(month: string, entries: ActivityLogEntry[]): Promise<void> {
   const key = blobKey(month);
-  const body = JSON.stringify(entries, null, 2);
+  // Compact, not pretty-printed: the whole month is rewritten on every entry,
+  // and indentation alone is about a third of the bytes.
+  const body = JSON.stringify(entries);
   if (useBlob) {
     await put(`${key}.json`, body, {
       access: "private",
