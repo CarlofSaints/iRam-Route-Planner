@@ -4,6 +4,10 @@
     {
       "path": "/api/cron/poll-visits",
       "schedule": "*/30 * * * *"
+    },
+    {
+      "path": "/api/cron/home-address-reminder",
+      "schedule": "0 6 * * 1"
     }
   ]
 }

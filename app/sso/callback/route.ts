@@ -5,6 +5,7 @@ import { encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/aut
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload, User } from "@/lib/types";
+import { findTeamForManager, normaliseEmail } from "@/lib/manager";
 
 // The slug this module is registered under in the iRam Hub's /admin/modules.
 // It must match exactly — the Hub puts the user's allowed slugs in the token.
@@ -90,11 +91,10 @@ export async function GET(request: NextRequest) {
   // Same enrichment the password login does — reps and team managers are matched by email
   if (session.role === "rep") {
     const reps = await getReps();
-    const rep = reps.find((r) => r.email.toLowerCase() === session.email.toLowerCase());
+    const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(session.email));
     if (rep) session.repCode = rep.code;
   } else if (session.role === "teamManager") {
-    const teams = await getTeams();
-    const team = teams.find((t) => t.managerEmail.toLowerCase() === session.email.toLowerCase());
+    const team = findTeamForManager(await getTeams(), session.email);
     if (team) session.teamId = team.id;
   }
 

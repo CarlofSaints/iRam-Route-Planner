@@ -4,6 +4,7 @@ import { encodeSession, requireSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS }
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload } from "@/lib/types";
 import { passwordProblem } from "@/lib/passwordRules";
+import { findTeamForManager, normaliseEmail } from "@/lib/manager";
 import bcrypt from "bcryptjs";
 
 /**
@@ -53,11 +54,10 @@ export async function POST(request: NextRequest) {
     // Enrich session with repCode / teamId based on role
     if (session.role === "rep") {
       const reps = await getReps();
-      const rep = reps.find((r) => r.email.toLowerCase() === session.email.toLowerCase());
+      const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(session.email));
       if (rep) session.repCode = rep.code;
     } else if (session.role === "teamManager") {
-      const teams = await getTeams();
-      const team = teams.find((t) => t.managerEmail.toLowerCase() === session.email.toLowerCase());
+      const team = findTeamForManager(await getTeams(), session.email);
       if (team) session.teamId = team.id;
     }
 

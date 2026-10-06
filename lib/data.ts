@@ -1,5 +1,5 @@
 import { put, list, get } from "@vercel/blob";
-import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
+import { Channel, Rep, Store, User, Team, RoutePlanDocument, RolePermission, ROLE_DEFINITIONS, ALL_PERMISSIONS, CallCycleType, DEFAULT_CALL_CYCLE_TYPES, Region, StoreOverride, VisitRole, DEFAULT_VISIT_ROLES, ReminderRun, ReminderStateMap } from "./types";
 import type { PasswordResetRecord } from "./passwordReset";
 import fs from "fs";
 import path from "path";
@@ -82,9 +82,25 @@ export async function saveChannels(channels: Channel[]): Promise<void> {
 
 export interface AppSettings {
   outlierRadiusKm: number; // stores beyond this distance from a rep's area are flagged out-of-range
+  /**
+   * Whether the Monday home-address reminder actually sends.
+   *
+   * Absent means ON. That is the unusual choice and it is deliberate: Carl asked
+   * for it live from the start (14 Sep 2026, same as Clippa), so the switch
+   * exists to STOP it, not to start it.
+   *
+   * Turning it off leaves the cron firing and the run logged. It just sends
+   * nothing, and the run says why.
+   */
+  homeAddressRemindersEnabled?: boolean;
 }
 
 const DEFAULT_SETTINGS: AppSettings = { outlierRadiusKm: 150 };
+
+/** The reading of the switch above, in one place, so nothing re-guesses it. */
+export function remindersEnabled(settings: AppSettings): boolean {
+  return settings.homeAddressRemindersEnabled !== false;
+}
 
 export async function getSettings(): Promise<AppSettings> {
   const saved = await readJSON<Partial<AppSettings> | null>("settings", null);
@@ -93,6 +109,41 @@ export async function getSettings(): Promise<AppSettings> {
 
 export async function saveSettings(settings: AppSettings): Promise<void> {
   await writeJSON("settings", settings);
+}
+
+// ---------- Home address reminders ----------
+
+/**
+ * How many times each rep has been asked for their home address, keyed by rep id.
+ *
+ * Kept in its own blob rather than as fields on the Rep record. A weekly cron
+ * rewriting reps.json would race anybody editing a rep at the time, and lose
+ * their edit. Nothing else reads this.
+ */
+export async function getReminderState(): Promise<ReminderStateMap> {
+  return readJSON<ReminderStateMap>("home-address-reminders", {});
+}
+
+export async function saveReminderState(state: ReminderStateMap): Promise<void> {
+  await writeJSON("home-address-reminders", state);
+}
+
+/**
+ * Every run of the reminder job, newest first.
+ *
+ * A cron that quietly stops firing is invisible: the only symptom is mail that
+ * did not arrive. Recording every run, including the ones that sent nothing, is
+ * what makes "when did this last work?" answerable.
+ */
+export async function getReminderRuns(): Promise<ReminderRun[]> {
+  return readJSON<ReminderRun[]>("logs/home-address-reminders", []);
+}
+
+const MAX_REMINDER_RUNS = 60;
+
+export async function appendReminderRun(run: ReminderRun): Promise<void> {
+  const runs = await getReminderRuns();
+  await writeJSON("logs/home-address-reminders", [run, ...runs].slice(0, MAX_REMINDER_RUNS));
 }
 
 // ---------- Geocode cache (reverse-geocoded place names, keyed by rounded coord) ----------

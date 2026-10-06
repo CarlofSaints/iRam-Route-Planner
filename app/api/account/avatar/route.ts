@@ -3,6 +3,7 @@ import { put, list, del } from "@vercel/blob";
 import { requireSession, encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS } from "@/lib/auth";
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { SessionPayload } from "@/lib/types";
+import { findTeamForManager, normaliseEmail } from "@/lib/manager";
 
 export async function POST(request: NextRequest) {
   try {
@@ -62,11 +63,10 @@ export async function POST(request: NextRequest) {
 
     if (updatedSession.role === "rep") {
       const reps = await getReps();
-      const rep = reps.find((r) => r.email.toLowerCase() === updatedSession.email.toLowerCase());
+      const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(updatedSession.email));
       if (rep) updatedSession.repCode = rep.code;
     } else if (updatedSession.role === "teamManager") {
-      const teams = await getTeams();
-      const team = teams.find((t) => t.managerEmail.toLowerCase() === updatedSession.email.toLowerCase());
+      const team = findTeamForManager(await getTeams(), updatedSession.email);
       if (team) updatedSession.teamId = team.id;
     }
 

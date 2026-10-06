@@ -16,7 +16,7 @@
  * back to the screen.
  */
 
-const BRAND = {
+export const BRAND = {
   green: "#7CC042",
   greenDark: "#5a9a2e",
   greenLight: "#e8f5d9",
@@ -49,7 +49,7 @@ export function resolveAppUrl(): string {
 }
 
 /** A name or email carrying `<` or `&` must not be able to break the markup. */
-function escapeHtml(value: string): string {
+export function escapeHtml(value: string): string {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
@@ -415,50 +415,35 @@ export function buildPasswordResetEmail(input: PasswordResetEmailInput): {
   return { subject: "Reset your iRam Route Planner password", html, text };
 }
 
-export async function sendPasswordResetEmail(
-  input: PasswordResetEmailInput
-): Promise<WelcomeEmailResult> {
-  const resendKey = process.env.RESEND_API_KEY;
-  if (!resendKey) {
-    return { sent: false, configured: false, reason: "No RESEND_API_KEY configured." };
-  }
-  const { subject, html, text } = buildPasswordResetEmail(input);
-  try {
-    const res = await fetch("https://api.resend.com/emails", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${resendKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        from: process.env.RESEND_FROM || "iRam <onboarding@resend.dev>",
-        to: input.email,
-        // The From address belongs to whichever domain is verified with the ESP,
-        // which is not necessarily a mailbox anyone reads. Without this a rep who
-        // hits Reply is writing into the void.
-        ...(process.env.RESEND_REPLY_TO ? { reply_to: process.env.RESEND_REPLY_TO } : {}),
-        subject,
-        html,
-        text,
-      }),
-    });
-    if (!res.ok) {
-      const errData = await res.json().catch(() => ({}));
-      console.error("Resend API error:", res.status, errData);
-      const detail = errData?.message || errData?.error || "Unknown error";
-      return { sent: false, configured: true, reason: `Email failed (${res.status}): ${detail}` };
-    }
-    return { sent: true };
-  } catch (err) {
-    console.error("Resend request failed:", err);
-    return { sent: false, configured: true, reason: `Email request failed: ${String(err)}` };
-  }
+export interface SendEmailInput {
+  /** One address, or several for a mail everyone on the list should see (the run summary). */
+  to: string | string[];
+  subject: string;
+  html: string;
+  text: string;
+  /**
+   * What to say when RESEND_API_KEY is missing. The welcome mail carries a
+   * password the admin still has to hand over by other means, so its wording
+   * differs; everything else can use the plain sentence.
+   */
+  notConfiguredReason?: string;
 }
 
-export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<WelcomeEmailResult> {
+/**
+ * The single place this app talks to Resend.
+ *
+ * The welcome and reset mails each had their own copy of this fetch, and the
+ * home-address reminder would have been a third. Nothing here throws: a mail
+ * failure must never roll back the thing the mail was announcing.
+ *
+ * ⚠️ Resend rate-limits at roughly 2 requests a second. A caller sending to a
+ * list must pace itself (see the reminder cron route).
+ */
+export async function sendEmail(input: SendEmailInput): Promise<WelcomeEmailResult> {
   const resendKey = process.env.RESEND_API_KEY;
   if (!resendKey) {
-    return { sent: false, configured: false, reason: "No RESEND_API_KEY configured. Share the credentials manually." };
+    return { sent: false, configured: false, reason: input.notConfiguredReason || "No RESEND_API_KEY configured." };
   }
-
-  const { subject, html, text } = buildWelcomeEmail(input);
 
   try {
     const res = await fetch("https://api.resend.com/emails", {
@@ -469,11 +454,14 @@ export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<Welcom
       },
       body: JSON.stringify({
         from: process.env.RESEND_FROM || "iRam <onboarding@resend.dev>",
-        to: input.email,
+        to: input.to,
+        // The From address belongs to whichever domain is verified with the ESP,
+        // which is not necessarily a mailbox anyone reads. Without this a rep who
+        // hits Reply is writing into the void.
         ...(process.env.RESEND_REPLY_TO ? { reply_to: process.env.RESEND_REPLY_TO } : {}),
-        subject,
-        html,
-        text,
+        subject: input.subject,
+        html: input.html,
+        text: input.text,
       }),
     });
 
@@ -489,4 +477,20 @@ export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<Welcom
     console.error("Resend request failed:", err);
     return { sent: false, configured: true, reason: `Email request failed: ${String(err)}` };
   }
+}
+
+export async function sendPasswordResetEmail(input: PasswordResetEmailInput): Promise<WelcomeEmailResult> {
+  const { subject, html, text } = buildPasswordResetEmail(input);
+  return sendEmail({ to: input.email, subject, html, text });
+}
+
+export async function sendWelcomeEmail(input: WelcomeEmailInput): Promise<WelcomeEmailResult> {
+  const { subject, html, text } = buildWelcomeEmail(input);
+  return sendEmail({
+    to: input.email,
+    subject,
+    html,
+    text,
+    notConfiguredReason: "No RESEND_API_KEY configured. Share the credentials manually.",
+  });
 }

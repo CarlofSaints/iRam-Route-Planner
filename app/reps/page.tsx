@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Rep, VisitRole, Team } from "@/lib/types";
 import { useSession } from "@/components/SessionProvider";
+import HomeAddressReminders from "@/components/HomeAddressReminders";
 
 /**
  * Opens whatever has been typed into a Home Address field in Google Maps, in a
@@ -507,6 +508,11 @@ export default function RepsPage() {
           </button>
         </div>
       )}
+
+      {/* Who the app is chasing for a home address, and when it next writes to
+          them. Above the table because the mail goes out whether anybody opens
+          this page or not, so the list of names should not be buried. */}
+      {canManageReps && <HomeAddressReminders />}
 
       {geocodeError && (
         <div className="p-3 rounded-lg text-sm mb-6 bg-red-50 text-red-700">{geocodeError}</div>

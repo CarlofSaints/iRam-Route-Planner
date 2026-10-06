@@ -13,18 +13,30 @@ export async function GET() {
   }
 }
 
+/**
+ * Whitespace off every text field before it is stored.
+ *
+ * `managerEmail` is the one that matters: it is a KEY, not a label. Sign-in
+ * matches a manager to their team on it, and the Monday home-address reminder
+ * decides who is chased (and who is copied) by it. Ported from Clippa, where a
+ * pasted trailing space would have silently detached a manager.
+ */
+function tidy(value: unknown): string {
+  return typeof value === "string" ? value.trim() : "";
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const teams = await getTeams();
     const newTeam: Team = {
       id: crypto.randomUUID(),
-      name: body.name || "",
-      managerId: body.managerId || "",
-      managerName: body.managerName || "",
-      managerEmail: body.managerEmail || "",
-      managerCell: body.managerCell || "",
-      area: body.area || "",
+      name: tidy(body.name),
+      managerId: tidy(body.managerId),
+      managerName: tidy(body.managerName),
+      managerEmail: tidy(body.managerEmail),
+      managerCell: tidy(body.managerCell),
+      area: tidy(body.area),
     };
     teams.push(newTeam);
     await saveTeams(teams);
@@ -45,6 +57,11 @@ export async function PUT(request: NextRequest) {
     const teams = await getTeams();
     const idx = teams.findIndex((t) => t.id === id);
     if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
+    // Trim what was sent, not the whole record: a field the caller did not
+    // mention must stay exactly as it was, which is what Object.assign gives.
+    for (const [key, value] of Object.entries(updates)) {
+      if (typeof value === "string") (updates as Record<string, unknown>)[key] = value.trim();
+    }
     Object.assign(teams[idx], updates);
     await saveTeams(teams);
 
