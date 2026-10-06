@@ -480,6 +480,44 @@ export default function CapacityPage() {
         </div>
       </div>
 
+      {/* Reading this table. Every marker is drawn HERE in the same styling it
+          has in the grid, against a worked example, rather than described in
+          prose the reader has to go and match up. (Ported from Clippa eeb3ed5.) */}
+      <div className="mt-3 bg-white border border-gray-100 rounded-xl p-4">
+        <p className="text-[10px] uppercase tracking-wider text-gray-400 mb-3">Reading this table</p>
+        <dl className="space-y-2.5 text-xs">
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+            <dt className="w-44 shrink-0 font-medium text-gray-700">Calls/mo, Calls/wk, Calls/day</dt>
+            <dd className="flex-1 min-w-[16rem] text-gray-500">
+              What the rep&apos;s stores ask for at their visit frequencies, for the rep&apos;s visit role. Not what
+              the route schedules. Week and day are the same figure over a 4-week cycle of 5 working days.
+            </dd>
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-gray-100 pt-2.5">
+            <dt className="w-44 shrink-0 whitespace-nowrap">
+              <span className="font-semibold text-red-700">40</span>
+              <span className="ml-1 text-gray-400">in Calls/day</span>
+            </dt>
+            <dd className="flex-1 min-w-[16rem] text-gray-500">
+              <strong className="text-red-700">Red</strong> means more than {DAILY_CALL_WARNING} calls a day, more than a
+              working day holds. The store <strong className="text-gray-700">frequencies</strong> decide this, not the
+              routes, so regenerating will not fix it.
+            </dd>
+          </div>
+          <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1 border-t border-gray-100 pt-2.5">
+            <dt className="w-44 shrink-0">
+              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-800">
+                Stores need 3.5x their hours
+              </span>
+            </dt>
+            <dd className="flex-1 min-w-[16rem] text-gray-500">
+              Time inside the stores alone, with no driving, is 3.5 times the hours the rep works in a 4-week cycle.
+              Any route will leave stores unassigned. Lower the frequencies or move stores to another rep.
+            </dd>
+          </div>
+        </dl>
+      </div>
+
       {/* Out-of-range stores */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100 mt-6">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 p-4 border-b border-gray-100">
