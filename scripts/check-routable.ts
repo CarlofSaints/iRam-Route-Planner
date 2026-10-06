@@ -207,4 +207,7 @@ const CHANNELS = [channel("indep"), channel("makro", { notARepChannel: true })];
   eq("an approved override brings it back for QC too", getStoresForRep(qcRep, excused, qc, null, CHANNELS).map((s) => s.id).sort(), ["i1", "m1"]);
 }
 
+console.log(`\n${passed} passed, ${failed} failed`);
+process.exit(failed === 0 ? 0 : 1);
+
 
