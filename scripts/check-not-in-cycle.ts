@@ -362,6 +362,9 @@ for (const key of Object.keys(REASONS) as NotInCycleReason[]) {
   ok("the page never tests the one spelling teamManager", !/role === "teamManager"/.test(page));
   ok("Save GPS sends the validated numbers, not the box text",
     /onSave=\{\(lat, lng\) => saveGps\(r\.store\.id, lat, lng\)\}/.test(page) && !/gpsLat: edit\.lat/.test(page));
+  ok("Save GPS refuses while another save is in flight", /if \(savingRef\.current\) return;/.test(page));
+  ok("every row's Save waits while any row saves", /locked=\{saving !== null\}/.test(page));
+  ok("the Saved note is shown whatever the row's reason now is", /\{saved\.has\(r\.store\.id\) \? \(/.test(page));
   ok("the reason dropdown counts follow the other filters", /reasonCounts\[r\]/.test(page) && !/result\.counts\[r\]/.test(page));
   const entry = fs.readFileSync(path.join(__dirname, "..", "components", "CoordinateEntry.tsx"), "utf8");
   ok("CoordinateEntry hands its validated numbers to onSave", /onSave\(check\.lat!, check\.lng!\)/.test(entry));

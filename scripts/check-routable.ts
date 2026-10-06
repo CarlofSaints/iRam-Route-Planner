@@ -271,10 +271,23 @@ const CHANNELS = [channel("indep"), channel("makro", { notARepChannel: true })];
   const page = fs.readFileSync(path.join(__dirname, "..", "app", "channels", "page.tsx"), "utf8");
   ok("the Channels page lists the flips from an import", /data\.calledOnChanges/.test(page) && /describeCalledOnChange\)/.test(page));
   ok("the Called on? confirm uses the two-number sentence", /switchOffSentence\(switchOffImpact\(/.test(page));
-  ok("switching off waits for the counts to load", /countsState !== "loaded"/.test(page));
+  // The body of one `const name = async (...) => {` handler, up to the next one.
+  const body = (name: string) => {
+    const start = page.indexOf(`const ${name} = async`);
+    if (start === -1) return "";
+    const next = page.slice(start + 1).search(/\n  const \w+ = /);
+    return next === -1 ? page.slice(start) : page.slice(start, start + 1 + next);
+  };
+  const calledOn = body("setCalledOn");
+  ok("switching off refuses before the counts load, ahead of the confirm",
+    /if \(countsState !== "loaded"\) \{/.test(calledOn) && calledOn.indexOf("countsState") < calledOn.indexOf("confirm("));
+  ok("the Called on? switch is locked off until the counts load", /on && countsState !== "loaded"\)/.test(page));
   ok("the Channels page gates its controls on canEdit(..., \"channels\")", /canEdit\(session\?\.role, "channels"\)/.test(page));
-  ok("the Channels page holds one write at a time", /if \(!beginWrite\(\)\) return;/.test(page) &&
-    (page.match(/beginWrite\(\)/g) ?? []).length >= 7);
+  for (const fn of ["setRoleEnabled", "setCalledOn", "saveEdit", "addChannel", "deleteChannel", "deleteSelected", "handleImport", "applyDefaults"]) {
+    const b = body(fn);
+    ok(`${fn} waits for any write already in flight`, /beginWrite\(\)/.test(b) && /endWrite\(\)/.test(b));
+  }
+  ok("the in-flight guard actually refuses a second write", /if \(inFlight\.current\) return false;/.test(page));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
