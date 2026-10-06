@@ -10,9 +10,10 @@
  * showing them until someone regenerates. On the worst single day the stored
  * figure is 108 km out.
  *
- * So the pages measure. Every reader of a day's cost uses this one function, so
- * the grid cell, the day panel and the map can never quote three different
- * answers for the same day.
+ * So the pages take the recorded leg when there is one and MEASURE when there
+ * is not, which is right on both a current plan and an old one. Every reader of
+ * a day's cost uses this one function, so the grid cell, the day panel and the
+ * map can never quote three different answers for the same day.
  */
 
 import { haversineKm, driveMinutes } from "./latlng";
@@ -45,8 +46,27 @@ export function dayTotals(
   const stopsMin = day.stops.reduce((s, st) => s + st.travelTimeFromPrev, 0);
   const visitMinutes = day.stops.reduce((s, st) => s + st.visitDuration, 0);
 
-  const returnKm = home && last ? haversineKm(last.lat, last.lng, home.lat, home.lng) : null;
-  const returnMinutes = returnKm === null ? null : driveMinutes(returnKm);
+  // 🔴 Prefer the leg the plan recorded, and measure only when there isn't one.
+  //
+  // A plan from the current engine stores a leg home that is already correct
+  // for the stop the day ends on, and on the 133 days Google routed it is a
+  // REAL ROAD distance. Re-measuring those as a straight line threw away 931 km
+  // across the book — about 7 km a day — and quietly understated exactly the
+  // leg this whole change exists to charge for. On the 572 days with no Google
+  // geometry the two agree to 0.00 km, which is what proves the fallback right.
+  //
+  // The fallback still matters: a plan saved before the field existed has none,
+  // and measuring is the only way those pages tell the truth before the next
+  // regeneration.
+  const stored = day.returnDistanceKm;
+  const returnKm =
+    stored !== undefined
+      ? stored
+      : home && last
+        ? haversineKm(last.lat, last.lng, home.lat, home.lng)
+        : null;
+  const returnMinutes =
+    returnKm === null ? null : (day.returnTravelTime ?? driveMinutes(returnKm));
 
   const travelMinutes = stopsMin + (returnMinutes ?? 0);
   const totalMinutes = travelMinutes + visitMinutes;

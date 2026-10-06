@@ -222,15 +222,60 @@ async function main() {
     );
   }
 
+  // 🔴 A recorded leg WINS over a fresh measurement.
+  //
+  // On the days Google routed, the stored leg is a real road distance and a
+  // straight line between the same two points is shorter — on the live book
+  // that gap is 931 km, all of it on the 133 days with saved geometry. Taking
+  // the measurement there would understate the very leg this exists to charge
+  // for. A road leg is never shorter than the straight line it follows, which
+  // is what makes "prefer the recording" safe rather than merely different.
+  {
+    const roadDay: RouteDayPlan = { ...trimmedDays[0], returnDistanceKm: 99.9, returnTravelTime: 150 };
+    const t = dayTotals(roadDay, home, 8.5);
+    const straight = expectedTotals(trimmedDays[0]).returnKm;
+    ok(
+      "a recorded road leg is used, not re-measured as a straight line",
+      t.returnKm === 99.9 && t.returnMinutes === 150,
+      `${t.returnKm} km / ${t.returnMinutes} min`
+    );
+    ok(
+      "and that is the longer of the two, so nothing is understated",
+      (t.returnKm ?? 0) > straight,
+      `${t.returnKm} vs ${straight.toFixed(1)}`
+    );
+    ok(
+      "the day's distance carries the recorded leg",
+      near(t.distanceKm, trimmedDays[0].stops.reduce((s, st) => s + st.distanceFromPrev, 0) + 99.9, 0.25)
+    );
+  }
+
   // 🔴 No anchor at all is not a 0 km drive home. A rep with no home and no
   // centroid must read as "not measured", or the page quietly claims they sleep
   // at their last call.
-  const noAnchor = dayTotals(trimmedDays[0], null, 8.5);
+  // This is the shape the engine actually produces for an anchorless rep: it
+  // DELETES the fields rather than writing 0, so there is nothing to fall back
+  // on and nothing to measure to.
+  const anchorless: RouteDayPlan = { ...trimmedDays[0] };
+  delete anchorless.returnDistanceKm;
+  delete anchorless.returnTravelTime;
+  delete anchorless.arriveHomeTime;
+  const noAnchor = dayTotals(anchorless, null, 8.5);
   ok("No start point: the leg home is absent, not zero", noAnchor.returnKm === null);
   ok("No start point: no arrival time is invented", noAnchor.arriveHome === null);
   ok(
     "No start point: the day still totals its stops",
     noAnchor.distanceKm > 0 && noAnchor.stops === trimmedDays[0].stops.length
+  );
+
+  // A day that RECORDED a leg home keeps it even when the caller passes no
+  // anchor: the recording is that day's own fact, and `home` exists only to
+  // make the fallback measurement possible.
+  const recordedButNoHome = dayTotals(trimmedDays[0], null, 8.5);
+  ok(
+    "A recorded leg survives a caller with no anchor",
+    recordedButNoHome.returnKm === trimmedDays[0].returnDistanceKm,
+    `${recordedButNoHome.returnKm} vs ${trimmedDays[0].returnDistanceKm}`
   );
 
   console.log(`\n${passed} passed, ${failed} failed`);
