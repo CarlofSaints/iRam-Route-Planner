@@ -27,7 +27,11 @@ type ImportResult = {
     region: number;
     gps: number;
     gpsCleared: number;
+    closed?: number;
+    reopened?: number;
   };
+  badStatus?: string[];
+  badStatusCount?: number;
   noIdRows?: number;
   columnsRead?: string[];
   columnsAbsent?: string[];
@@ -95,6 +99,8 @@ export default function StoreImportModal({
         ["Store name", changed.name],
         ["Province", changed.province],
         ["Region", changed.region],
+        ["Marked Closed", changed.closed ?? 0],
+        ["Reopened (Active)", changed.reopened ?? 0],
       ] as const).filter(([, n]) => n > 0)
     : [];
 
@@ -262,6 +268,7 @@ export default function StoreImportModal({
               (result.duplicateIdCount ?? 0) > 0 ||
               (result.noIdRows ?? 0) > 0 ||
               (result.changed?.gpsCleared ?? 0) > 0 ||
+              (result.badStatusCount ?? 0) > 0 ||
               result.gpsHalfPresent) && (
               <div className="mt-3 p-3 rounded-lg text-sm bg-amber-50 text-amber-800 border border-amber-200 space-y-2">
                 {(result.changed?.gpsCleared ?? 0) > 0 && (
@@ -357,6 +364,23 @@ export default function StoreImportModal({
                   </p>
                 )}
 
+                {(result.badStatusCount ?? 0) > 0 && (
+                  <div>
+                    <p className="text-xs font-medium">
+                      {result.badStatusCount} STATUS cell{result.badStatusCount === 1 ? " was" : "s were"} not
+                      Active or Closed, so {result.badStatusCount === 1 ? "that store keeps" : "those stores keep"} the
+                      status {result.badStatusCount === 1 ? "it has" : "they have"}:
+                    </p>
+                    <ul className="list-disc list-inside space-y-0.5 mt-0.5">
+                      {result.badStatus!.map((m, i) => (
+                        <li key={i} className="text-[11px]">
+                          {m}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+
                 {(result.noIdRows ?? 0) > 0 && (
                   <p className="text-xs">
                     {result.noIdRows} row{result.noIdRows === 1 ? "" : "s"} had no Place ID and{" "}
@@ -376,6 +400,7 @@ export default function StoreImportModal({
               <span>PROVINCE</span>
               <span>REGION</span>
               <span>GPS LATITUDE + GPS LONGITUDE</span>
+              <span>STATUS: Active or Closed (a blank cell changes nothing)</span>
             </div>
             <p className="text-[11px] text-gray-400 mt-3">
               Every other column in the exported file is ignored, including the rep, visit role and

@@ -4,6 +4,7 @@ import { overriddenStoreIds } from "@/lib/channelDefaults";
 import { Channel, Store } from "@/lib/types";
 import { requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { applyStatus, parseStatusCell } from "@/lib/closedStores";
 import * as XLSX from "xlsx";
 
 /**
@@ -23,7 +24,7 @@ import * as XLSX from "xlsx";
  */
 
 /** The fields this route is allowed to write. Everything else is out of scope. */
-const IMPORTABLE = ["PLACE NAME", "CHANNEL", "PROVINCE", "REGION", "GPS LATITUDE", "GPS LONGITUDE"];
+const IMPORTABLE = ["PLACE NAME", "CHANNEL", "PROVINCE", "REGION", "GPS LATITUDE", "GPS LONGITUDE", "STATUS"];
 
 export async function POST(request: NextRequest) {
   try {
@@ -72,6 +73,7 @@ export async function POST(request: NextRequest) {
     const REGION_COLS = ["REGION", "AREA"] as const;
     const LAT_COLS = ["GPS LATITUDE", "GPS_LATITUDE", "LATITUDE"] as const;
     const LNG_COLS = ["GPS LONGITUDE", "GPS_LONGITUDE", "LONGITUDE"] as const;
+    const STATUS_COLS = ["STATUS", "STORE STATUS"] as const;
 
     if (!hasHeader(...ID_COLS)) {
       return NextResponse.json(
@@ -101,11 +103,14 @@ export async function POST(request: NextRequest) {
       // Latitude and longitude move as a pair. Writing one without the other
       // leaves a half coordinate that plots nowhere, so both must be present.
       gps: hasHeader(...LAT_COLS) && hasHeader(...LNG_COLS),
+      // Active / Closed. Files exported before this column existed simply do
+      // not have it, and every store keeps the status it has.
+      status: hasHeader(...STATUS_COLS),
     };
     const gpsHalfPresent =
       !present.gps && (hasHeader(...LAT_COLS) || hasHeader(...LNG_COLS));
 
-    if (!present.name && !present.channel && !present.province && !present.region && !present.gps) {
+    if (!present.name && !present.channel && !present.province && !present.region && !present.gps && !present.status) {
       return NextResponse.json(
         {
           error: `This file has a PLACE ID column but none of the columns this page imports (${IMPORTABLE.join(
@@ -144,7 +149,8 @@ export async function POST(request: NextRequest) {
       if (!channelByName.has(k)) channelByName.set(k, c);
     }
 
-    const changed = { name: 0, channel: 0, province: 0, region: 0, gps: 0, gpsCleared: 0 };
+    const changed = { name: 0, channel: 0, province: 0, region: 0, gps: 0, gpsCleared: 0, closed: 0, reopened: 0 };
+    const badStatus: string[] = [];
     let matched = 0;
     let unchanged = 0;
     const unmatched: string[] = [];
@@ -243,11 +249,27 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (present.status) {
+        const raw = col(row, ...STATUS_COLS);
+        const closed = parseStatusCell(raw);
+        // 🔴 A BLANK status cell leaves the store alone. Unlike the other
+        // columns, blank cannot mean "clear": clearing a status is reopening
+        // the shop, and a deleted cell would quietly send reps back to it.
+        if (closed === null) {
+          badStatus.push(`${placeId}: "${raw}" is not Active or Closed, status left unchanged`);
+        } else if (closed !== undefined && applyStatus(store, closed)) {
+          if (closed) changed.closed++;
+          else changed.reopened++;
+          touched = true;
+        }
+      }
+
       if (!touched) unchanged++;
     }
 
     const totalChanges =
-      changed.name + changed.channel + changed.province + changed.region + changed.gps;
+      changed.name + changed.channel + changed.province + changed.region + changed.gps +
+      changed.closed + changed.reopened;
     if (totalChanges > 0) await saveStores(stores);
 
     logActivity({
@@ -257,7 +279,8 @@ export async function POST(request: NextRequest) {
       summary:
         `Stores-only import of ${file.name}: ${matched} of ${rows.length} rows matched, ` +
         `${totalChanges} field changes (${changed.gps} GPS, ${changed.channel} channel, ` +
-        `${changed.name} name, ${changed.province} province, ${changed.region} region). ` +
+        `${changed.name} name, ${changed.province} province, ${changed.region} region, ` +
+        `${changed.closed} closed, ${changed.reopened} reopened). ` +
         `No rep or role data read.`,
     });
 
@@ -278,6 +301,7 @@ export async function POST(request: NextRequest) {
         present.province && "PROVINCE",
         present.region && "REGION",
         present.gps && "GPS LATITUDE / GPS LONGITUDE",
+        present.status && "STATUS",
       ].filter(Boolean) as string[],
       columnsAbsent: [
         !present.name && "PLACE NAME",
@@ -285,7 +309,10 @@ export async function POST(request: NextRequest) {
         !present.province && "PROVINCE",
         !present.region && "REGION",
         !present.gps && "GPS LATITUDE / GPS LONGITUDE",
+        !present.status && "STATUS",
       ].filter(Boolean) as string[],
+      badStatus: badStatus.slice(0, 25),
+      badStatusCount: badStatus.length,
       gpsHalfPresent,
       unmatchedCount: unmatched.length,
       unmatched: unmatched.slice(0, 25),
