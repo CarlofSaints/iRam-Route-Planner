@@ -404,21 +404,21 @@ export const GUIDE: GuideSection[] = [
           },
           {
             do: "The rep capturing it themselves, which is better",
-            detail: "Give the rep a login. They sign in, open Account, and tap Use my current location while standing at home. That records the exact spot from the phone's GPS with nothing to look up and nothing to get wrong. This is the only method that works reliably for an informal address.",
+            detail: "Give the rep a login. They sign in, open Account, and tap Use my current location while standing at home, or Drop a pin on the map from anywhere. Standing at home records the exact spot from the phone's GPS with nothing to look up and nothing to get wrong. This is the only method that works reliably for an informal address.",
           },
         ],
       },
       {
         kind: "shot",
         slot: "rep-account",
-        caption: "What a rep sees: their own profile, and nothing else",
+        caption: "A rep's own profile, where they set the home their day starts from",
         capture: "The /account page signed in as a rep, showing the Where your day starts card and the Use my current location button",
       },
       {
         kind: "note",
         tone: "info",
         title: "Giving reps their own logins",
-        text: "On the Reps page, Create login makes an account for a rep and emails them their sign-in details. A rep login can reach their own profile and nothing else: not the rep list, not the store list, not anyone's routes. They are asked to choose their own password the first time they sign in.",
+        text: "On the Reps page, Create login makes an account for a rep and emails them their sign-in details. A rep login opens on My Route, their own four-week cycle a day at a time with directions, and can reach their own profile. Nothing else: not the rep list, not the store list, not anyone else's routes. My Route also lists every store the rep holds any visit role at, including QC and training calls. They are asked to choose their own password the first time they sign in.",
       },
       {
         kind: "note",
