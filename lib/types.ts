@@ -573,6 +573,22 @@ export interface RouteDayPlan {
    * the day is longer than the rep's hours instead of quietly dropping a store.
    */
   overrunMinutes?: number;
+  /**
+   * The drive from the last stop back to the rep's start point.
+   *
+   * It is on the plan because no stop can carry it — every `distanceFromPrev`
+   * is a leg INTO a stop, so the leg home belonged to nothing and was only ever
+   * baked into the totals. Once a day is trimmed to the calls-per-day target
+   * the last stop changes, and a baked-in figure then measures the drive home
+   * from a shop the rep no longer visits.
+   *
+   * Absent on a plan generated before this existed, and on a rep with no start
+   * point at all — a reader must treat missing as "not measured", never 0 km.
+   */
+  returnDistanceKm?: number;
+  returnTravelTime?: number; // minutes
+  /** When the rep gets home, last stop's departure plus the leg home. */
+  arriveHomeTime?: string; // "HH:mm"
   polyline?: string; // encoded Google polyline
 }
 

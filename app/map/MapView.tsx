@@ -4,7 +4,8 @@ import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
-import { Store, Rep, Channel, RouteStop, VisitRole, getVisitRoleName } from "@/lib/types";
+import { Store, Rep, Channel, RouteStop, RouteDayPlan, VisitRole, getVisitRoleName } from "@/lib/types";
+import { dayTotals } from "@/lib/dayTotals";
 
 /**
  * One day's line on the map. `road` false means no saved Google geometry, so
@@ -35,6 +36,15 @@ interface Props {
   repColors: Record<string, string>;
   visitRoles: VisitRole[];
   routeStops?: MapRouteStop[];
+  /**
+   * The day plans the stops came from, in the same order.
+   *
+   * The summary needs whole days, not a flat list of stops: the drive home
+   * belongs to a day, and a week on screen has five of them. Sharing
+   * `dayTotals` with the Routes page is what keeps the two pages from quoting
+   * different distances for the same Monday.
+   */
+  routeDays?: RouteDayPlan[];
   routeLines?: RouteLine[];
   /**
    * Stop 0. `derived` means no home address was captured and this is the
@@ -118,6 +128,7 @@ function numberedIcon(num: number, background: string = "#DC2626"): L.DivIcon {
 function possessive(name: string): string {
   return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
 }
+
 
 /**
  * Home marker — numbered 0.
@@ -295,6 +306,7 @@ export default function MapView({
   repColors,
   visitRoles,
   routeStops,
+  routeDays,
   routeLines,
   repHome,
   showRoute,
@@ -307,17 +319,47 @@ export default function MapView({
   // Per-day polyline colors (cycle through for multi-day views)
   const lineColors = ["#DC2626", "#2563EB", "#16A34A", "#D97706", "#7C3AED", "#0891B2", "#DB2777", "#65A30D"];
 
-  // Route summary stats
+  /**
+   * Route summary stats — the WHOLE day, including both ends at home.
+   *
+   * 🔴 Summing `distanceFromPrev` across the stops counts the drive OUT to the
+   * first call (it is stop 1's own leg) but nothing for the drive back, because
+   * no stop carries the leg home — the day therefore read as ending at the last
+   * shop. On the current plan that is a real 26 km nobody was charged for. The
+   * return leg is measured here rather than read off the plan on purpose: a
+   * saved plan holds no such field, so a figure taken from it would be right
+   * only after the next regeneration.
+   *
+   * Every day on screen gets its own leg home. A week view is four days, so
+   * there are four drives home, not one.
+   */
   const routeSummary = useMemo(() => {
-    if (!showRoute || !routeStops || routeStops.length === 0) return null;
-    const totalDistance = routeStops.reduce((s, st) => s + st.distanceFromPrev, 0);
-    const totalTravel = routeStops.reduce((s, st) => s + st.travelTimeFromPrev, 0);
+    if (!showRoute || !routeDays || routeDays.length === 0) return null;
+    const anchor = repHome ? { lat: repHome.lat, lng: repHome.lng } : null;
+    const totals = routeDays.map((d) => dayTotals(d, anchor));
+    if (totals.length === 0) return null;
+
+    const sum = (pick: (t: (typeof totals)[number]) => number) =>
+      totals.reduce((s, t) => s + pick(t), 0);
+
+    // The drive OUT is stop 1's own leg, on each day on screen.
+    const outbound = routeDays.reduce((s, d) => s + (d.stops[0]?.distanceFromPrev ?? 0), 0);
+
+    // Times only make sense for one day: four Mondays have four clocks.
+    const single = totals.length === 1;
+
     return {
-      stops: routeStops.length,
-      distance: Math.round(totalDistance),
-      travelHours: (totalTravel / 60).toFixed(1),
+      stops: sum((t) => t.stops),
+      days: totals.length,
+      distance: Math.round(sum((t) => t.distanceKm)),
+      travelHours: (sum((t) => t.travelMinutes) / 60).toFixed(1),
+      outboundKm: Math.round(outbound * 10) / 10,
+      returnKm: Math.round(sum((t) => t.returnKm ?? 0) * 10) / 10,
+      hasHome: !!anchor,
+      leaveHome: single ? totals[0].leaveHome : null,
+      backHome: single ? totals[0].arriveHome : null,
     };
-  }, [showRoute, routeStops]);
+  }, [showRoute, routeDays, repHome]);
 
   return (
     <div className="relative h-full w-full">
@@ -464,9 +506,30 @@ export default function MapView({
         <div className="absolute bottom-4 left-4 bg-white/95 backdrop-blur rounded-lg shadow-lg px-4 py-3 z-[1000] text-xs">
           <div className="font-semibold text-gray-900 mb-1">Route Summary</div>
           <div className="text-gray-600 space-y-0.5">
-            <p>{routeSummary.stops} stops</p>
+            <p>
+              {routeSummary.stops} stops
+              {routeSummary.days > 1 && ` over ${routeSummary.days} days`}
+            </p>
             <p>{routeSummary.distance} km total</p>
             <p>{routeSummary.travelHours}h travel time</p>
+            {/* Spelled out because the two ends of the day are the legs nobody
+                sees: neither is a marker on the map, and the drive home was not
+                in this total at all until it was put there. */}
+            {routeSummary.hasHome ? (
+              <p className="text-gray-500 pt-1">
+                Incl. {routeSummary.outboundKm} km out and {routeSummary.returnKm} km home
+                {routeSummary.days > 1 && ` (${routeSummary.days} days)`}
+              </p>
+            ) : (
+              <p className="text-amber-700 pt-1">
+                No start point on this plan, so no drive to or from home is counted
+              </p>
+            )}
+            {routeSummary.leaveHome && routeSummary.backHome && (
+              <p className="text-gray-500">
+                Leaves {routeSummary.leaveHome} · back {routeSummary.backHome}
+              </p>
+            )}
             {/* Only shown when a day on screen actually has no road geometry —
                 a legend for something that is not there teaches the wrong thing. */}
             {routeLines?.some((l) => !l.road) && (

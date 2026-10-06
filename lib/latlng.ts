@@ -42,3 +42,17 @@ export function haversineKm(
     Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
+
+/**
+ * Average driving speed assumed when there is no Google leg to measure.
+ *
+ * It lives here rather than in the engine because the map has to be able to
+ * price the leg home on a plan that was saved without one, and a second copy
+ * of the number would let the map and the engine quote different drives.
+ */
+export const DEFAULT_SPEED_KMH = 40;
+
+/** Minutes behind a distance, at the assumed average speed. */
+export function driveMinutes(km: number): number {
+  return (km / DEFAULT_SPEED_KMH) * 60;
+}

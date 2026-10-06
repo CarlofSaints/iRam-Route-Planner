@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getRoutes, getRoutesForType, getStores } from "@/lib/data";
 import { DayLabel } from "@/lib/types";
 import { requireSession } from "@/lib/auth";
+import { parseClock, formatClock } from "@/lib/clock";
 import XLSX from "xlsx";
 
 // NOTE: carried over from the Repsly build — this is a best-guess schedule-import
@@ -81,7 +82,11 @@ export async function GET(request: NextRequest) {
               placeIdById.get(stop.storeId) || stop.storeId,
               dateStr,
               0, // explicit one-off visit (no recurrence)
-              stop.arrivalTime,
+              // Normalised, not copied. The engine used to round the minutes
+              // AFTER dividing, so a saved plan can hold "10:60", which is not
+              // a time. Fixed at source, but this file is built from whatever
+              // plan is saved, so it must not depend on a regeneration.
+              formatClock(parseClock(stop.arrivalTime)),
               stop.visitDuration,
               dp.day,
               plan.repName,

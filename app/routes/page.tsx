@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { FilterDropdown } from "@/components/FilterDropdown";
+import { dayTotals } from "@/lib/dayTotals";
 import {
   Rep,
   Team,
@@ -381,6 +382,26 @@ export default function RoutesPage() {
     return grid.get(`${selectedCell.week}-${selectedCell.day}`) || null;
   }, [selectedCell, grid]);
 
+  /**
+   * What the selected day costs, drive home included.
+   *
+   * The panel has always drawn a "Return home" row and charged nothing to it,
+   * which is what made a day look like it ended at the last shop. Every figure
+   * in the panel and the grid now comes from `dayTotals`, so the eight legs
+   * listed and the total printed under them are the same arithmetic.
+   */
+  const selectedTotals = useMemo(
+    () =>
+      selectedDayPlan && currentPlan
+        ? dayTotals(selectedDayPlan, currentPlan.homeLatLng, currentPlan.workingHoursPerDay)
+        : null,
+    [selectedDayPlan, currentPlan]
+  );
+
+  /** The same measurement for a grid cell, which has no selection behind it. */
+  const cellTotals = (plan: RouteDayPlan) =>
+    dayTotals(plan, currentPlan?.homeLatLng, currentPlan?.workingHoursPerDay);
+
   const storeById = useMemo(
     () => new Map(stores.map((s) => [s.id, s])),
     [stores]
@@ -475,7 +496,11 @@ export default function RoutesPage() {
   // Capacity color
   const capacityColor = (plan: RouteDayPlan | undefined, workingHours: number) => {
     if (!plan || plan.stops.length === 0) return "bg-gray-50 text-gray-400";
-    const utilization = plan.totalTime / (workingHours * 60);
+    // Measured, like the figure printed inside the cell — a day coloured green
+    // off one total and labelled with another is worse than either alone.
+    const utilization =
+      dayTotals(plan, currentPlan?.homeLatLng, workingHours).totalMinutes /
+      (workingHours * 60);
     if (utilization > 1) return "bg-red-50 border-red-200 text-red-800";
     if (utilization > 0.85) return "bg-amber-50 border-amber-200 text-amber-800";
     return "bg-green-50 border-green-200 text-green-800";
@@ -941,8 +966,8 @@ export default function RoutesPage() {
                                   {plan.stops.length} stores
                                 </div>
                                 <div className="text-xs mt-0.5">
-                                  {(plan.totalTime / 60).toFixed(1)}h |{" "}
-                                  {Math.round(plan.totalDistance)}km
+                                  {(cellTotals(plan).totalMinutes / 60).toFixed(1)}h |{" "}
+                                  {Math.round(cellTotals(plan).distanceKm)}km
                                 </div>
                               </>
                             ) : (
@@ -975,10 +1000,10 @@ export default function RoutesPage() {
                 View on Map
               </a>
               <span className="text-xs text-gray-500">
-                {selectedDayPlan.stops.length} stores |{" "}
-                {(selectedDayPlan.totalTravelTime / 60).toFixed(1)}h travel |{" "}
-                {(selectedDayPlan.totalVisitTime / 60).toFixed(1)}h visits |{" "}
-                {Math.round(selectedDayPlan.totalDistance)}km
+                {selectedTotals!.stops} stores |{" "}
+                {(selectedTotals!.travelMinutes / 60).toFixed(1)}h travel |{" "}
+                {(selectedTotals!.visitMinutes / 60).toFixed(1)}h visits |{" "}
+                {Math.round(selectedTotals!.distanceKm)}km
               </span>
             </div>
           </div>
@@ -1054,7 +1079,19 @@ export default function RoutesPage() {
                     />
                   </svg>
                 </div>
-                <span>Return home</span>
+                {/* The leg that was drawn and never charged. Naming the drive
+                    and the time the rep gets in is the difference between a day
+                    that "ends at the last shop" and one that ends at home. */}
+                <span>
+                  Return home
+                  {selectedTotals?.returnKm !== null && selectedTotals && (
+                    <span className="text-gray-500">
+                      {" "}
+                      : {selectedTotals.returnKm} km, {selectedTotals.returnMinutes} min
+                      drive, home {selectedTotals.arriveHome}
+                    </span>
+                  )}
+                </span>
               </div>
             )}
           </div>
@@ -1062,32 +1099,33 @@ export default function RoutesPage() {
           {/* Summary bar */}
           <div
             className={`mt-4 rounded-lg px-4 py-2.5 text-xs font-medium ${
-              selectedDayPlan.overCapacity
+              selectedTotals!.overBy
                 ? "bg-red-50 text-red-700"
                 : "bg-green-50 text-green-700"
             }`}
           >
-            {selectedDayPlan.stops.length} stores |{" "}
-            {(selectedDayPlan.totalTravelTime / 60).toFixed(1)}h travel |{" "}
-            {(selectedDayPlan.totalVisitTime / 60).toFixed(1)}h visits |{" "}
-            {(selectedDayPlan.totalTime / 60).toFixed(1)}h total |{" "}
-            {Math.round(selectedDayPlan.totalDistance)}km
+            {selectedTotals!.stops} stores |{" "}
+            {(selectedTotals!.travelMinutes / 60).toFixed(1)}h travel |{" "}
+            {(selectedTotals!.visitMinutes / 60).toFixed(1)}h visits |{" "}
+            {(selectedTotals!.totalMinutes / 60).toFixed(1)}h total |{" "}
+            {Math.round(selectedTotals!.distanceKm)}km
             {/* By HOW MUCH, not just that it is over. "Over capacity" on half a
                 rep's days is noise; 8 minutes and two hours are different
                 problems. With a calls-per-day target this is the honest half of
                 the bargain — the day carries what was asked for AND says it
-                runs long, rather than quietly dropping the last call. */}
-            {selectedDayPlan.overCapacity && (
+                runs long, rather than quietly dropping the last call.
+
+                Measured here rather than read off `overrunMinutes`, so the
+                overrun is against the same total the bar prints — and so the
+                drive home is inside it. A day that fits until the rep starts
+                driving home does not fit. */}
+            {selectedTotals!.overBy !== null && (
               <span className="ml-1">
-                {selectedDayPlan.overrunMinutes
-                  ? `| OVER the working day by ${
-                      selectedDayPlan.overrunMinutes >= 60
-                        ? `${Math.floor(selectedDayPlan.overrunMinutes / 60)}h ${selectedDayPlan.overrunMinutes % 60}m`
-                        : `${selectedDayPlan.overrunMinutes}m`
-                    }`
-                  : /* A plan generated before the minutes were recorded. Saying
-                       what is known beats inventing a figure for it. */
-                    "| OVER CAPACITY"}
+                {`| OVER the working day by ${
+                  selectedTotals!.overBy >= 60
+                    ? `${Math.floor(selectedTotals!.overBy / 60)}h ${selectedTotals!.overBy % 60}m`
+                    : `${selectedTotals!.overBy}m`
+                }`}
               </span>
             )}
           </div>

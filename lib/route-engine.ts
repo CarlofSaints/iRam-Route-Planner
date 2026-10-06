@@ -10,11 +10,11 @@ import {
   getVisitsPerWeek,
 } from "./types";
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
-import { parseLatLng, haversineKm } from "./latlng";
+import { parseLatLng, haversineKm, DEFAULT_SPEED_KMH, driveMinutes } from "./latlng";
+import { parseClock, formatClock } from "./clock";
 
 const WEEKS: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
 const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-const DEFAULT_SPEED_KMH = 40; // estimated avg speed for Haversine fallback
 const DEFAULT_WORKING_HOURS = 8.5;
 const DEFAULT_START_TIME = "08:00";
 
@@ -128,9 +128,9 @@ export async function generateRepRoute(
       // dropping the eighth store and looking like the setting was ignored.
       // Without a target, the old time-based trim is untouched.
       const removed = callsPerDay && callsPerDay > 0
-        ? trimToCount(plan, callsPerDay, workingMinutes)
+        ? trimToCount(plan, callsPerDay, workingMinutes, home)
         : plan.overCapacity
-          ? trimToCapacity(plan, workingMinutes)
+          ? trimToCapacity(plan, workingMinutes, home)
           : [];
       for (const r of removed) {
         // Carry the whole planned stop, not just its name. It already holds
@@ -562,28 +562,79 @@ async function buildDayPlan(
     currentTime += visitDuration;
   }
 
-  // Add return-home travel time to total
-  const lastLeg = legs[orderedStores.length];
-  const returnTravel = lastLeg?.durationMin || 0;
-  const returnDist = lastLeg?.distanceKm || 0;
-
-  const totalTravelTime =
-    stops.reduce((s, st) => s + st.travelTimeFromPrev, 0) + returnTravel;
-  const totalVisitTime = stops.reduce((s, st) => s + st.visitDuration, 0);
-  const totalDistance =
-    stops.reduce((s, st) => s + st.distanceFromPrev, 0) + returnDist;
-
-  return {
+  const plan: RouteDayPlan = {
     day,
     week,
     stops,
-    totalTravelTime: Math.round(totalTravelTime),
-    totalVisitTime: Math.round(totalVisitTime),
-    totalTime: Math.round(totalTravelTime + totalVisitTime),
-    totalDistance: Math.round(totalDistance * 10) / 10,
-    overCapacity: totalTravelTime + totalVisitTime > workingMinutes,
+    totalTravelTime: 0,
+    totalVisitTime: 0,
+    totalTime: 0,
+    totalDistance: 0,
+    overCapacity: false,
     polyline,
   };
+
+  // Every total on the day is built in one place, so the leg home can never be
+  // in one of them and missing from another. Google's own last leg is handed
+  // over when it exists — it is a real road distance, and re-measuring it as a
+  // straight line here would throw that away.
+  const lastLeg = home ? legs[orderedStores.length] : undefined;
+  applyReturnLeg(plan, home, workingMinutes, lastLeg);
+  return plan;
+}
+
+/**
+ * Measure the leg home from whatever stop the day now ends on, and rebuild the
+ * day's totals around it.
+ *
+ * 🔴 This exists because the totals were only ever true at the instant the day
+ * was built. Trimming to the calls-per-day target pops stops off the END, and
+ * the old code subtracted the dropped stop's leg IN while leaving the leg HOME
+ * exactly as it was — still measured from a shop that is no longer on the
+ * route. With 3 491 visits trimmed over the 8-call target, almost every day in
+ * the current plan carries that stale figure, and `totalTime` is what capacity
+ * and the calls-per-day argument are read off.
+ *
+ * `leg` is the measured drive home when one is known (Google's last leg at
+ * build time); without it the distance is a straight line from the new last
+ * stop, which is the same basis as every other leg the fallback produces.
+ */
+function applyReturnLeg(
+  plan: RouteDayPlan,
+  home: { lat: number; lng: number } | null,
+  workingMinutes: number,
+  leg?: { distanceKm: number; durationMin: number }
+): void {
+  const last = plan.stops[plan.stops.length - 1];
+
+  if (!home || !last) {
+    // No anchor means there is no drive home to price. Left ABSENT rather than
+    // zeroed: a reader must be able to tell "no leg home" from "the rep lives
+    // next door to their last call".
+    delete plan.returnDistanceKm;
+    delete plan.returnTravelTime;
+    delete plan.arriveHomeTime;
+  } else {
+    const distanceKm = leg
+      ? leg.distanceKm
+      : haversineKm(last.lat, last.lng, home.lat, home.lng);
+    const durationMin = leg ? leg.durationMin : driveMinutes(distanceKm);
+    plan.returnDistanceKm = Math.round(distanceKm * 10) / 10;
+    plan.returnTravelTime = Math.round(durationMin * 10) / 10;
+    plan.arriveHomeTime = formatTime(parseTime(last.departureTime) + durationMin);
+  }
+
+  const returnTravel = plan.returnTravelTime ?? 0;
+  const returnDist = plan.returnDistanceKm ?? 0;
+  const travel = plan.stops.reduce((s, st) => s + st.travelTimeFromPrev, 0) + returnTravel;
+  const visits = plan.stops.reduce((s, st) => s + st.visitDuration, 0);
+  const distance = plan.stops.reduce((s, st) => s + st.distanceFromPrev, 0) + returnDist;
+
+  plan.totalTravelTime = Math.round(travel);
+  plan.totalVisitTime = Math.round(visits);
+  plan.totalTime = Math.round(travel + visits);
+  plan.totalDistance = Math.round(distance * 10) / 10;
+  applyOverrun(plan, workingMinutes);
 }
 
 function nearestNeighborOrder(
@@ -654,18 +705,17 @@ function nearestNeighborOrder(
 function trimToCount(
   plan: RouteDayPlan,
   callsPerDay: number,
-  workingMinutes: number
+  workingMinutes: number,
+  home: { lat: number; lng: number } | null
 ): RouteStop[] {
   const removed: RouteStop[] = [];
   while (plan.stops.length > callsPerDay && plan.stops.length > 1) {
-    const last = plan.stops.pop()!;
-    removed.push(last);
-    plan.totalVisitTime -= last.visitDuration;
-    plan.totalTravelTime -= last.travelTimeFromPrev;
-    plan.totalTime = plan.totalTravelTime + plan.totalVisitTime;
-    plan.totalDistance -= last.distanceFromPrev;
+    removed.push(plan.stops.pop()!);
   }
-  applyOverrun(plan, workingMinutes);
+  // Re-measured, not adjusted: dropping the last three calls changes where the
+  // rep drives home FROM.
+  if (removed.length > 0) applyReturnLeg(plan, home, workingMinutes);
+  else applyOverrun(plan, workingMinutes);
   return removed;
 }
 
@@ -691,16 +741,15 @@ export function applyOverrun(plan: RouteDayPlan, workingMinutes: number): void {
 
 function trimToCapacity(
   plan: RouteDayPlan,
-  workingMinutes: number
+  workingMinutes: number,
+  home: { lat: number; lng: number } | null
 ): RouteStop[] {
   const removed: RouteStop[] = [];
   while (plan.totalTime > workingMinutes && plan.stops.length > 1) {
-    const last = plan.stops.pop()!;
-    removed.push(last);
-    plan.totalVisitTime -= last.visitDuration;
-    plan.totalTravelTime -= last.travelTimeFromPrev;
-    plan.totalTime = plan.totalTravelTime + plan.totalVisitTime;
-    plan.totalDistance -= last.distanceFromPrev;
+    removed.push(plan.stops.pop()!);
+    // Inside the loop, because the new leg home is part of what decides
+    // whether the day now fits: a shorter route ending 40 km out may not.
+    applyReturnLeg(plan, home, workingMinutes);
   }
   plan.overCapacity = plan.totalTime > workingMinutes;
   return removed;
@@ -767,10 +816,24 @@ async function rebalanceOverflow(
       const distanceKm = from
         ? haversineKm(from.lat, from.lng, planned.lat, planned.lng)
         : 0;
-      const travelMin = (distanceKm / DEFAULT_SPEED_KMH) * 60;
+      const travelMin = driveMinutes(distanceKm);
       const visitDuration = planned.visitDuration;
 
-      if (bestDay.totalTime + travelMin + visitDuration <= workingMinutes) {
+      // What the day WOULD cost with this store on the end: the current total,
+      // less the leg home it holds now, plus the new leg in, the visit, and the
+      // longer drive home from the store just added. Comparing against the old
+      // total alone let a store on at the far edge of the territory look free.
+      const newReturnMin = home
+        ? driveMinutes(haversineKm(planned.lat, planned.lng, home.lat, home.lng))
+        : 0;
+      const prospective =
+        bestDay.totalTime -
+        (bestDay.returnTravelTime ?? 0) +
+        travelMin +
+        visitDuration +
+        newReturnMin;
+
+      if (prospective <= workingMinutes) {
         // Arrive after the last stop departs. totalTravelTime includes the
         // return-home leg, so it can't be used as a clock.
         const departLast = lastStop
@@ -790,11 +853,9 @@ async function rebalanceOverflow(
           sequence: bestDay.stops.length + 1,
         });
 
-        bestDay.totalTravelTime += travelMin;
-        bestDay.totalVisitTime += visitDuration;
-        bestDay.totalTime += travelMin + visitDuration;
-        bestDay.totalDistance += distanceKm;
-        applyOverrun(bestDay, workingMinutes);
+        // The day ends somewhere new now, so the leg home is re-measured and
+        // every total rebuilt around it.
+        applyReturnLeg(bestDay, home, workingMinutes);
 
         fitted.push(i);
       }
@@ -857,13 +918,8 @@ function storeCentroid(stores: Store[]): { lat: number; lng: number } | null {
 
 export { haversineKm };
 
-function parseTime(hhmm: string): number {
-  const [h, m] = hhmm.split(":").map(Number);
-  return h * 60 + m;
-}
-
-function formatTime(minutes: number): string {
-  const h = Math.floor(minutes / 60) % 24;
-  const m = Math.round(minutes % 60);
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
+// One definition of a time of day, shared with the pages that now do the same
+// arithmetic. The old local copy rounded the minutes AFTER dividing, so a stop
+// leaving at 16:59.6 was stamped "16:60".
+const parseTime = parseClock;
+const formatTime = formatClock;
