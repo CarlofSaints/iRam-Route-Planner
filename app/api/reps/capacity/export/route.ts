@@ -28,6 +28,11 @@ export async function GET() {
         "Team",
         "Stores",
         "Calls/Month",
+        "Calls/Week",
+        "Calls/Day",
+        "Visit Hours Needed (no travel)",
+        "Stores Need More Hours Than Available",
+        "Stores Visited Weekly Or More",
         "Hours/Day",
         "Scheduled Hours/Month",
         "Visit Hours",
@@ -50,6 +55,11 @@ export async function GET() {
         teamName.get(r.teamId) || "Unassigned",
         r.storeCount,
         r.callsPerMonth,
+        r.callsPerWeek,
+        r.callsPerDay,
+        r.bookVisitHours,
+        r.bookExceedsHours ? `Yes (${r.bookOverBy}x)` : "No",
+        r.weeklyOrMoreStores,
         r.workingHoursPerDay,
         r.hasRoute ? r.scheduledHours : "",
         r.hasRoute ? r.visitHours : "",
@@ -66,7 +76,8 @@ export async function GET() {
     const ws = XLSX.utils.aoa_to_sheet(rows);
     ws["!cols"] = [
       { wch: 12 }, { wch: 24 }, { wch: 14 }, { wch: 20 }, { wch: 8 },
-      { wch: 11 }, { wch: 9 }, { wch: 20 }, { wch: 11 }, { wch: 12 },
+      { wch: 11 }, { wch: 10 }, { wch: 9 }, { wch: 18 }, { wch: 20 }, { wch: 16 },
+      { wch: 9 }, { wch: 20 }, { wch: 11 }, { wch: 12 },
       { wch: 20 }, { wch: 12 }, { wch: 11 }, { wch: 17 }, { wch: 16 },
       { wch: 8 },
     ];

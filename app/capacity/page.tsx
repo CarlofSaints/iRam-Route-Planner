@@ -3,6 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { Team } from "@/lib/types";
+import { DAILY_CALL_WARNING } from "@/lib/capacity";
 
 interface RepCapacity {
   repCode: string;
@@ -13,6 +14,12 @@ interface RepCapacity {
   workingHoursPerDay: number;
   storeCount: number;
   callsPerMonth: number;
+  callsPerWeek: number;
+  callsPerDay: number;
+  bookVisitHours: number;
+  bookExceedsHours: boolean;
+  bookOverBy: number;
+  weeklyOrMoreStores: number;
   hasRoute: boolean;
   scheduledVisits: number;
   visitHours: number;
@@ -179,6 +186,14 @@ export default function CapacityPage() {
     [reps]
   );
 
+  // Reps whose stores, at the frequencies they carry, need more visit time
+  // than the rep has in a cycle. Worst first: the ratio says how far from
+  // possible it is.
+  const impossibleBooks = useMemo(
+    () => reps.filter((r) => r.bookExceedsHours).sort((a, b) => b.bookOverBy - a.bookOverBy),
+    [reps]
+  );
+
   const roll = useMemo(() => {
     const routed = reps.filter((r) => r.hasRoute);
     const avgUtil = routed.length
@@ -304,6 +319,34 @@ export default function CapacityPage() {
         </div>
       )}
 
+      {/* Books that cannot fit the hours, whatever the routing does */}
+      {impossibleBooks.length > 0 && (
+        <div className="rounded-lg border border-red-200 bg-red-50 p-4 mb-6 text-sm text-red-800">
+          <p className="font-semibold">
+            {impossibleBooks.length} rep{impossibleBooks.length === 1 ? "'s" : "s'"} stores need more visit time than
+            the rep has in a 4-week cycle
+          </p>
+          <p className="mt-1 text-red-700">
+            Counted on time inside the store only, with no driving, so their real days are worse than this. No route
+            can fix it: any plan will schedule what fits and leave the rest unassigned. Change the visit frequencies
+            (a weekly channel default reaches every store in the channel) or move stores to another rep.
+          </p>
+          <ul className="mt-2 space-y-0.5">
+            {impossibleBooks.map((r) => (
+              <li key={r.repCode}>
+                <span className="font-medium">{r.repName}</span>
+                {r.visitRoleName && <span className="text-red-600"> ({r.visitRoleName})</span>}: needs{" "}
+                {Math.round(r.bookVisitHours)}h of visits against {Math.round(r.availableHours)}h available (
+                {r.bookOverBy}x), {r.callsPerDay} calls a day
+                {r.weeklyOrMoreStores > 0 && (
+                  <>, {r.weeklyOrMoreStores} store{r.weeklyOrMoreStores === 1 ? "" : "s"} visited weekly or more</>
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {/* Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
         <div className="overflow-x-auto">
@@ -314,6 +357,10 @@ export default function CapacityPage() {
                 {isAdmin && <th className="px-4 py-3">Team</th>}
                 <th className="px-4 py-3 text-right">Stores</th>
                 <th className="px-4 py-3 text-right">Calls/mo</th>
+                <th className="px-4 py-3 text-right">Calls/wk</th>
+                <th className="px-4 py-3 text-right" title="What the rep's stores ask for per working day, at their visit frequencies. Not what the route schedules.">
+                  Calls/day
+                </th>
                 <th className="px-4 py-3 text-right">Hrs used / avail</th>
                 <th className="px-4 py-3 w-48">Utilisation</th>
                 <th className="px-4 py-3 text-right">Spare (h)</th>
@@ -339,6 +386,21 @@ export default function CapacityPage() {
                     {isAdmin && <td className="px-4 py-3 text-gray-600">{teamName(r.teamId)}</td>}
                     <td className="px-4 py-3 text-right text-gray-700">{r.storeCount}</td>
                     <td className="px-4 py-3 text-right text-gray-700">{r.callsPerMonth}</td>
+                    <td className="px-4 py-3 text-right text-gray-700">{r.callsPerWeek}</td>
+                    {/* Red once it is past what a day can hold: a book asking
+                        for 37 calls a day is not a routing problem. */}
+                    <td className="px-4 py-3 text-right">
+                      {r.callsPerDay > DAILY_CALL_WARNING ? (
+                        <span
+                          className="font-semibold text-red-700"
+                          title={`${r.callsPerDay} calls a day is more than a working day holds. The store frequencies, not the routes, decide this.`}
+                        >
+                          {r.callsPerDay}
+                        </span>
+                      ) : (
+                        <span className="text-gray-700">{r.callsPerDay}</span>
+                      )}
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-700">
                       {r.hasRoute ? (
                         <span>
@@ -378,6 +440,14 @@ export default function CapacityPage() {
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-1">
+                        {r.bookExceedsHours && (
+                          <span
+                            className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-red-100 text-red-800"
+                            title={`Visits alone need ${Math.round(r.bookVisitHours)}h against ${Math.round(r.availableHours)}h available, before any driving`}
+                          >
+                            Stores need {r.bookOverBy}x their hours
+                          </span>
+                        )}
                         {r.overCapacityDays > 0 && (
                           <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-red-50 text-red-700">
                             {r.overCapacityDays} over-cap day{r.overCapacityDays > 1 ? "s" : ""}
@@ -400,7 +470,7 @@ export default function CapacityPage() {
               })}
               {sorted.length === 0 && (
                 <tr>
-                  <td colSpan={isAdmin ? 9 : 8} className="px-4 py-8 text-center text-gray-400">
+                  <td colSpan={isAdmin ? 11 : 10}className="px-4 py-8 text-center text-gray-400">
                     No reps to show.
                   </td>
                 </tr>
