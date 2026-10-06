@@ -10,6 +10,7 @@ import {
   getVisitsPerWeek,
 } from "./types";
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
+import { parseLatLng } from "./latlng";
 
 const WEEKS: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
 const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -819,21 +820,10 @@ async function rebalanceOverflow(
 // ──────────────────────────────────────────────
 
 /**
- * Parse and validate a lat/lng pair. Returns null for missing, non-numeric,
- * out-of-range, or null-island (0,0) coordinates so corrupted rows can't be
- * routed or distance-measured.
+ * Parse and validate a lat/lng pair — defined in `lib/latlng.ts` and re-exported
+ * here, because the map page needs the same rule without the whole engine.
  */
-export function parseLatLng(
-  latStr: string | undefined,
-  lngStr: string | undefined
-): { lat: number; lng: number } | null {
-  const lat = parseFloat(latStr ?? "");
-  const lng = parseFloat(lngStr ?? "");
-  if (isNaN(lat) || isNaN(lng)) return null;
-  if (lat < -90 || lat > 90 || lng < -180 || lng > 180) return null;
-  if (Math.abs(lat) < 0.01 && Math.abs(lng) < 0.01) return null; // (0,0) placeholder
-  return { lat, lng };
-}
+export { parseLatLng };
 
 /**
  * Component-wise median lat/lng of stores with valid GPS — a robust centre of a

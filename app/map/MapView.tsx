@@ -31,7 +31,7 @@ interface Props {
    * Stop 0. `derived` means no home address was captured and this is the
    * centroid of the rep's stores — it must not be presented as their home.
    */
-  repHome?: { lat: number; lng: number; derived?: boolean; address?: string } | null;
+  repHome?: { lat: number; lng: number; derived?: boolean; address?: string; repName?: string } | null;
   showRoute?: boolean;
   singleDay?: boolean; // true when exactly one day plan is on the map
 }
@@ -90,6 +90,14 @@ function numberedIcon(num: number, background: string = "#DC2626"): L.DivIcon {
     iconSize: [24, 24],
     iconAnchor: [12, 12],
   });
+}
+
+/**
+ * "David Dikolomela's", but "Panagioti Apostilides'" — a trailing s takes the
+ * apostrophe alone. Four reps here have one, so the naive version is visible.
+ */
+function possessive(name: string): string {
+  return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
 }
 
 /**
@@ -252,7 +260,14 @@ export default function MapView({
           <Marker position={[repHome.lat, repHome.lng]} icon={homeIcon}>
             <Popup>
               <div className="text-xs space-y-1">
-                <p className="font-bold text-sm">0 · Start &amp; End of Day</p>
+                <p className="font-bold text-sm">
+                  {repHome.repName
+                    ? repHome.derived
+                      ? `${possessive(repHome.repName)} start point`
+                      : `${possessive(repHome.repName)} Home`
+                    : "0 · Start & End of Day"}
+                </p>
+                {repHome.repName && <p className="text-gray-500">0 · Start &amp; End of Day</p>}
                 {repHome.derived ? (
                   <>
                     <p className="text-amber-700 font-medium">Not a real home address</p>

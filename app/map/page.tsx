@@ -6,6 +6,7 @@ import dynamic from "next/dynamic";
 import { useSession } from "@/components/SessionProvider";
 import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, CallCycleStrategy, VisitRole, getVisitRoleName } from "@/lib/types";
 import { decodePolyline } from "@/lib/google-maps";
+import { parseLatLng } from "@/lib/latlng";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
@@ -34,6 +35,7 @@ function RepSearchSelect({
   colors,
   visitRoles,
   callsPerDay,
+  startsAtHome,
 }: {
   reps: Rep[];
   value: string;
@@ -49,6 +51,15 @@ function RepSearchSelect({
    * describe a week that rep does not have.
    */
   callsPerDay: Record<string, number | undefined>;
+  /**
+   * Rep code to whether their day starts at a real home address.
+   *
+   * False means the engine anchors them on the centroid of their own stores,
+   * which is a guess: the first and last drive of every day is wrong by
+   * however far they actually live from there. Worth seeing BEFORE picking the
+   * rep, because it explains a route that looks oddly ordered.
+   */
+  startsAtHome: Record<string, boolean>;
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -120,7 +131,7 @@ function RepSearchSelect({
       </button>
 
       {open && (
-        <div className="absolute z-[1000] mt-1 w-72 bg-white border border-gray-200 rounded-lg shadow-lg">
+        <div className="absolute z-[1000] mt-1 w-80 bg-white border border-gray-200 rounded-lg shadow-lg">
           <div className="p-2 border-b border-gray-100">
             <input
               value={search}
@@ -169,6 +180,21 @@ function RepSearchSelect({
                     ({getVisitRoleName(r.visitRoleId, visitRoles)})
                   </span>
                   <span className="ml-auto text-[10px] text-gray-400 font-mono flex-shrink-0">{r.code}</span>
+                  {/* Where this rep's day starts: their own address, or a guess. */}
+                  <span
+                    className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${
+                      startsAtHome[r.code]
+                        ? "bg-green-50 text-green-700"
+                        : "bg-amber-50 text-amber-700"
+                    }`}
+                    title={
+                      startsAtHome[r.code]
+                        ? `${r.name} starts and ends the day at their home address`
+                        : `${r.name} has no usable home GPS, so their day starts from the centre of their stores. Add their home address on the Reps page.`
+                    }
+                  >
+                    {startsAtHome[r.code] ? "home" : "centroid"}
+                  </span>
                   {/* What this rep's week is actually built on. */}
                   <span
                     className={`shrink-0 text-[10px] font-medium px-1.5 py-0.5 rounded ${
@@ -297,6 +323,19 @@ function MapPageInner() {
     for (const p of routes?.repPlans ?? []) out[p.repCode] = p.callsPerDay;
     return out;
   }, [routes]);
+  /**
+   * Which reps start their day at a real home address.
+   *
+   * Uses the route engine's own parseLatLng, never a bare parseFloat, so this
+   * badge can never claim a home the engine refuses to route from — (0,0) and
+   * an out-of-range fix are exactly the values that differ.
+   */
+  const repStartsAtHome = useMemo(() => {
+    const out: Record<string, boolean> = {};
+    for (const r of scopedReps) out[r.code] = !!parseLatLng(r.homeGpsLat, r.homeGpsLng);
+    return out;
+  }, [scopedReps]);
+
   const visibleRepCodes = useMemo(() => {
     return new Set(scopedReps.map((r) => r.code));
   }, [scopedReps]);
@@ -370,14 +409,16 @@ function MapPageInner() {
     const rep = repMap.get(filterRep);
     if (!rep) return null;
 
-    const lat = parseFloat(rep.homeGpsLat);
-    const lng = parseFloat(rep.homeGpsLng);
-    if (!isNaN(lat) && !isNaN(lng)) {
-      return { lat, lng, derived: false, address: rep.homeAddress };
+    // The engine's own check, so the pin and the route always agree about
+    // whether this rep has a home: a bare parseFloat accepts (0,0) and a
+    // lat/lng outside South Africa, both of which the engine rejects.
+    const home = parseLatLng(rep.homeGpsLat, rep.homeGpsLng);
+    if (home) {
+      return { ...home, derived: false, address: rep.homeAddress, repName: rep.name };
     }
 
     const planned = routes?.repPlans.find((p) => p.repCode === filterRep)?.homeLatLng;
-    if (planned) return { lat: planned.lat, lng: planned.lng, derived: true };
+    if (planned) return { lat: planned.lat, lng: planned.lng, derived: true, repName: rep.name };
 
     return null;
   }, [showRoute, filterRep, repMap, routes]);
@@ -434,6 +475,7 @@ function MapPageInner() {
             colors={repColors}
             visitRoles={visitRoles}
             callsPerDay={repCallsPerDay}
+            startsAtHome={repStartsAtHome}
             onChange={(code) => {
               setFilterRep(code);
               if (code) setShowRoute(true);
