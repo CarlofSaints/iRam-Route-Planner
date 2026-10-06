@@ -1,10 +1,19 @@
 "use client";
 
-import { useMemo } from "react";
-import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Marker } from "react-leaflet";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { MapContainer, TileLayer, CircleMarker, Popup, Polyline, Marker, useMap } from "react-leaflet";
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { Store, Rep, Channel, RouteStop, VisitRole, getVisitRoleName } from "@/lib/types";
+
+/**
+ * One day's line on the map. `road` false means no saved Google geometry, so
+ * the line only joins the stops in order and is drawn dashed to say so.
+ */
+export interface RouteLine {
+  positions: [number, number][];
+  road: boolean;
+}
 
 /**
  * A route stop plus which day plan it came from. Sequence numbers restart at 1
@@ -26,7 +35,7 @@ interface Props {
   repColors: Record<string, string>;
   visitRoles: VisitRole[];
   routeStops?: MapRouteStop[];
-  routeLines?: [number, number][][]; // per-day polyline positions
+  routeLines?: RouteLine[];
   /**
    * Stop 0. `derived` means no home address was captured and this is the
    * centroid of the rep's stores — it must not be presented as their home.
@@ -42,6 +51,8 @@ interface Props {
   } | null;
   showRoute?: boolean;
   singleDay?: boolean; // true when exactly one day plan is on the map
+  /** Changes when the rep, day or week changes: the map re-fits to the new route. */
+  fitKey?: string;
 }
 
 /** Decode Google's encoded polyline format */
@@ -101,8 +112,8 @@ function numberedIcon(num: number, background: string = "#DC2626"): L.DivIcon {
 }
 
 /**
- * "David Dikolomela's", but "Panagioti Apostilides'" — a trailing s takes the
- * apostrophe alone. Four reps here have one, so the naive version is visible.
+ * "Thabo's", but "Thomas'": a trailing s takes the apostrophe alone. Trimmed,
+ * because rep names arrive from the Perigee export with trailing spaces.
  */
 function possessive(name: string): string {
   return /s$/i.test(name.trim()) ? `${name.trim()}'` : `${name.trim()}'s`;
@@ -137,6 +148,146 @@ const homeIcon = L.divIcon({
   iconAnchor: [15, 15],
 });
 
+/**
+ * Move the map to whatever is being shown, but only when the SELECTION changes.
+ *
+ * The map opens on Gauteng. Pick a KZN or Cape rep and their route is drawn
+ * hundreds of kilometres off screen, which looks exactly like a rep with no
+ * routes. Fitting on every render instead would
+ * fight the user: pan away to look at something and the map would snap back.
+ */
+function FitToRoute({ fitKey, positions }: { fitKey: string; positions: [number, number][] }) {
+  const map = useMap();
+  const lastKey = useRef<string | null>(null);
+  useEffect(() => {
+    if (!positions.length || fitKey === lastKey.current) return;
+    lastKey.current = fitKey;
+    map.fitBounds(L.latLngBounds(positions), { padding: [60, 60], maxZoom: 13 });
+  }, [fitKey, positions, map]);
+  return null;
+}
+
+/**
+ * Pull markers that land on top of each other apart, in SCREEN pixels.
+ *
+ * Two shops in one centre are metres apart, and a 24px marker is about 100m
+ * wide at this zoom, so the later one hides the earlier one completely and the
+ * route reads 5, 7 with no 6. Two stores in one mall can share a coordinate
+ * exactly, so no zoom level separates them on its own.
+ *
+ * The offset is computed in pixels and undone into lat/lng, so the fan is the
+ * same visual size at every zoom and collapses back onto the true position as
+ * you zoom in and the markers stop colliding. Popups still name the real store,
+ * and the line still runs through the true points.
+ */
+function useFannedPositions(stops: MapRouteStop[] | undefined): Map<string, [number, number]> {
+  const map = useMap();
+  const [zoom, setZoom] = useState(() => map.getZoom());
+
+  useEffect(() => {
+    const onZoom = () => setZoom(map.getZoom());
+    map.on("zoomend", onZoom);
+    return () => {
+      map.off("zoomend", onZoom);
+    };
+  }, [map]);
+
+  return useMemo(() => {
+    const out = new Map<string, [number, number]>();
+    if (!stops?.length) return out;
+
+    const CELL = 26; // px — a marker is 24px, so anything inside one cell collides
+    const RADIUS = 15; // px to push each colliding marker off the shared centre
+    const buckets = new Map<string, MapRouteStop[]>();
+    const points = new Map<string, L.Point>();
+
+    for (const s of stops) {
+      const key = `${s.week}-${s.day}-${s.storeId}-${s.sequence}`;
+      const pt = map.project([s.lat, s.lng], zoom);
+      points.set(key, pt);
+      const cell = `${Math.round(pt.x / CELL)}:${Math.round(pt.y / CELL)}`;
+      const list = buckets.get(cell) ?? [];
+      list.push(s);
+      buckets.set(cell, list);
+    }
+
+    for (const group of buckets.values()) {
+      group.forEach((s, i) => {
+        const key = `${s.week}-${s.day}-${s.storeId}-${s.sequence}`;
+        const pt = points.get(key)!;
+        if (group.length === 1) {
+          out.set(key, [s.lat, s.lng]);
+          return;
+        }
+        const angle = (2 * Math.PI * i) / group.length;
+        const moved = L.point(pt.x + RADIUS * Math.cos(angle), pt.y + RADIUS * Math.sin(angle));
+        const ll = map.unproject(moved, zoom);
+        out.set(key, [ll.lat, ll.lng]);
+      });
+    }
+    return out;
+  }, [stops, map, zoom]);
+}
+
+/**
+ * The numbered stops, fanned apart where they would cover each other.
+ *
+ * Lives in its own component because the fan needs the live map (useMap), which
+ * is only available inside <MapContainer>.
+ */
+function RouteStopMarkers({
+  routeStops,
+  singleDay,
+  lineColors,
+}: {
+  routeStops: MapRouteStop[];
+  singleDay?: boolean;
+  lineColors: string[];
+}) {
+  const fanned = useFannedPositions(routeStops);
+
+  return (
+    <>
+      {routeStops.map((stop) => {
+        const key = `${stop.week}-${stop.day}-${stop.storeId}-${stop.sequence}`;
+        const shown = fanned.get(key) ?? [stop.lat, stop.lng];
+        const moved = shown[0] !== stop.lat || shown[1] !== stop.lng;
+        return (
+          <Marker
+            key={`route-${key}`}
+            position={shown}
+            riseOnHover
+            icon={numberedIcon(
+              stop.sequence,
+              singleDay ? "#DC2626" : lineColors[stop.dayIndex % lineColors.length]
+            )}
+          >
+            <Popup>
+              <div className="text-xs space-y-1">
+                <p className="font-bold text-sm">#{stop.sequence} {stop.storeName}</p>
+                {!singleDay && (
+                  <p className="font-medium" style={{ color: lineColors[stop.dayIndex % lineColors.length] }}>
+                    {stop.week} · {stop.day}
+                  </p>
+                )}
+                <p><span className="text-gray-500">Arrive:</span> {stop.arrivalTime}</p>
+                <p><span className="text-gray-500">Depart:</span> {stop.departureTime}</p>
+                <p><span className="text-gray-500">Visit:</span> {stop.visitDuration} min</p>
+                {stop.distanceFromPrev > 0 && (
+                  <p><span className="text-gray-500">Distance:</span> {stop.distanceFromPrev} km</p>
+                )}
+                {moved && (
+                  <p className="text-gray-400">Nudged to clear another stop at the same spot</p>
+                )}
+              </div>
+            </Popup>
+          </Marker>
+        );
+      })}
+    </>
+  );
+}
+
 export default function MapView({
   stores,
   repMap,
@@ -148,6 +299,7 @@ export default function MapView({
   repHome,
   showRoute,
   singleDay,
+  fitKey,
 }: Props) {
   const center: [number, number] = [-26.2, 28.05];
   const zoom = 10;
@@ -213,55 +365,57 @@ export default function MapView({
           );
         })}
 
-        {/* Route polylines — one per day */}
-        {showRoute && routeLines?.map((positions, i) =>
-          positions.length > 1 ? (
-            <Polyline
-              key={`route-line-${i}`}
-              positions={positions}
-              pathOptions={{
-                color: lineColors[i % lineColors.length],
-                weight: 3,
-                opacity: singleDay ? 0.7 : 0.5,
-                dashArray: "8, 6",
-              }}
-            />
-          ) : null
-        )}
+        {/* Route polylines — one per day.
+            Drawn over a street map that is itself all coloured lines, so each
+            day gets a white casing underneath: without it a 50%-opacity dashed
+            line disappears into the roads and the route reads as missing.
+            A SOLID line is the real drive from Google; DASHED is the fallback
+            that only joins the stops in order. */}
+        {showRoute &&
+          routeLines?.map(({ positions, road }, i) =>
+            positions.length > 1 ? (
+              <Fragment key={`route-line-${i}`}>
+                <Polyline
+                  positions={positions}
+                  pathOptions={{ color: "#FFFFFF", weight: 7, opacity: 0.85 }}
+                />
+                <Polyline
+                  positions={positions}
+                  pathOptions={{
+                    color: lineColors[i % lineColors.length],
+                    weight: 4,
+                    opacity: singleDay ? 0.95 : 0.85,
+                    dashArray: road ? undefined : "10, 7",
+                  }}
+                />
+              </Fragment>
+            ) : null
+          )}
 
         {/* Route stop markers.
             Numbers restart at 1 within each day, so when several days are
             shown the map legitimately contains more than one "1". Each day's
             markers take that day's line colour, and the popup names the day,
             so repeated numbers can be told apart. */}
-        {showRoute &&
-          routeStops?.map((stop) => (
-            <Marker
-              key={`route-${stop.week}-${stop.day}-${stop.storeId}-${stop.sequence}`}
-              position={[stop.lat, stop.lng]}
-              icon={numberedIcon(
-                stop.sequence,
-                singleDay ? "#DC2626" : lineColors[stop.dayIndex % lineColors.length]
-              )}
-            >
-              <Popup>
-                <div className="text-xs space-y-1">
-                  <p className="font-bold text-sm">#{stop.sequence} {stop.storeName}</p>
-                  {!singleDay && (
-                    <p className="font-medium" style={{ color: lineColors[stop.dayIndex % lineColors.length] }}>
-                      {stop.week} · {stop.day}
-                    </p>
-                  )}
-                  <p><span className="text-gray-500">Arrive:</span> {stop.arrivalTime}</p>
-                  <p><span className="text-gray-500">Depart:</span> {stop.departureTime}</p>
-                  <p><span className="text-gray-500">Visit:</span> {stop.visitDuration} min</p>
-                  {stop.distanceFromPrev > 0 && (
-                    <p><span className="text-gray-500">Distance:</span> {stop.distanceFromPrev} km</p>
-                  )}
-                </div>
-              </Popup>
-            </Marker>
-          ))}
+        {/* Bring the selection on screen: a Cape or KZN rep's route is drawn
+            far outside the Gauteng view the map opens on. */}
+        {showRoute && fitKey && (
+          <FitToRoute
+            fitKey={fitKey}
+            positions={[
+              ...(routeStops ?? []).map((s) => [s.lat, s.lng] as [number, number]),
+              ...(repHome ? [[repHome.lat, repHome.lng] as [number, number]] : []),
+            ]}
+          />
+        )}
+
+        {showRoute && routeStops && (
+          <RouteStopMarkers
+            routeStops={routeStops}
+            singleDay={singleDay}
+            lineColors={lineColors}
+          />
+        )}
 
         {/* Rep home marker — stop 0, where every day starts and ends */}
         {showRoute && repHome && (
@@ -313,6 +467,11 @@ export default function MapView({
             <p>{routeSummary.stops} stops</p>
             <p>{routeSummary.distance} km total</p>
             <p>{routeSummary.travelHours}h travel time</p>
+            {/* Only shown when a day on screen actually has no road geometry —
+                a legend for something that is not there teaches the wrong thing. */}
+            {routeLines?.some((l) => !l.road) && (
+              <p className="text-gray-400 pt-1">Dashed: call order, no road route saved</p>
+            )}
           </div>
         </div>
       )}

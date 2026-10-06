@@ -7,6 +7,7 @@ import { useSession } from "@/components/SessionProvider";
 import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, CallCycleStrategy, VisitRole, getVisitRoleName } from "@/lib/types";
 import { decodePolyline } from "@/lib/google-maps";
 import { parseLatLng, haversineKm } from "@/lib/latlng";
+import type { RouteLine } from "./MapView";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
@@ -440,27 +441,28 @@ function MapPageInner() {
 
   // Build per-day polyline positions. Prefer Google's road-following geometry
   // (stored on each day plan); fall back to straight lines home → stops → home.
-  const routeLines = useMemo((): [number, number][][] => {
+  const routeLines = useMemo((): RouteLine[] => {
     if (matchingDayPlans.length === 0) return [];
     const home = (() => {
       const rep = repMap.get(filterRep);
       if (!rep) return null;
-      const lat = parseFloat(rep.homeGpsLat);
-      const lng = parseFloat(rep.homeGpsLng);
-      return !isNaN(lat) && !isNaN(lng) ? [lat, lng] as [number, number] : null;
+      const fix = parseLatLng(rep.homeGpsLat, rep.homeGpsLng);
+      return fix ? ([fix.lat, fix.lng] as [number, number]) : null;
     })();
     return matchingDayPlans.map((dp) => {
       // Road-following line from the stored Google polyline, when present.
       if (dp.polyline) {
         const decoded = decodePolyline(dp.polyline);
-        if (decoded.length > 1) return decoded;
+        if (decoded.length > 1) return { positions: decoded, road: true };
       }
-      // Fallback: straight segments home → stops → home.
+      // Fallback: straight segments home → stops → home. Drawn dashed, because
+      // it is the order of the calls, not the drive. A day the Google budget
+      // ran out on has no saved road geometry at all.
       const pts: [number, number][] = [];
       if (home) pts.push(home);
       for (const stop of dp.stops) pts.push([stop.lat, stop.lng]);
       if (home) pts.push(home);
-      return pts;
+      return { positions: pts, road: false };
     });
   }, [matchingDayPlans, filterRep, repMap]);
 
@@ -628,6 +630,7 @@ function MapPageInner() {
           repHome={repHome}
           showRoute={allRouteStops.length > 0}
           singleDay={matchingDayPlans.length === 1}
+          fitKey={`${selectedTypeId}|${filterRep}|${filterWeek}|${filterDay}`}
         />
       </div>
     </div>
