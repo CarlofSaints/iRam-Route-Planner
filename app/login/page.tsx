@@ -46,7 +46,9 @@ function LoginForm() {
         setError(data.error || "Login failed");
         return;
       }
-      const destination = data.user?.role === "rep" ? "/account" : "/";
+      // A rep lands on their own route; it nudges them to Account if their
+      // home is not set yet.
+      const destination = data.user?.role === "rep" ? "/my-route" : "/";
       setLanding(destination);
 
       if (data.user?.forcePasswordChange) {
