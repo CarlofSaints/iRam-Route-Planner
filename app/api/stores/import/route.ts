@@ -4,7 +4,7 @@ import { overriddenStoreIds } from "@/lib/channelDefaults";
 import { Channel, Store } from "@/lib/types";
 import { requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
-import { applyStatus, parseStatusCell } from "@/lib/closedStores";
+import { applyStatus, importStatusOutcome } from "@/lib/closedStores";
 import * as XLSX from "xlsx";
 import { refuseEdit } from "@/lib/editGuard";
 
@@ -155,6 +155,11 @@ export async function POST(request: NextRequest) {
 
     const changed = { name: 0, channel: 0, province: 0, region: 0, gps: 0, gpsCleared: 0, closed: 0, reopened: 0 };
     const badStatus: string[] = [];
+    // Named, not just counted: closing a store takes it out of every call
+    // cycle, and a number alone cannot be checked against what was meant.
+    const closedNames: string[] = [];
+    const reopenedNames: string[] = [];
+    const keptClosed: string[] = [];
     let matched = 0;
     let unchanged = 0;
     const unmatched: string[] = [];
@@ -255,16 +260,29 @@ export async function POST(request: NextRequest) {
 
       if (present.status) {
         const raw = col(row, ...STATUS_COLS);
-        const closed = parseStatusCell(raw);
         // 🔴 A BLANK status cell leaves the store alone. Unlike the other
         // columns, blank cannot mean "clear": clearing a status is reopening
         // the shop, and a deleted cell would quietly send reps back to it.
-        if (closed === null) {
-          badStatus.push(`${placeId}: "${raw}" is not Active or Closed, status left unchanged`);
-        } else if (closed !== undefined && applyStatus(store, closed)) {
-          if (closed) changed.closed++;
-          else changed.reopened++;
-          touched = true;
+        // 🔴 Nor does "Active" reopen a closed store: an old export says Active
+        // for every store that was open THEN. Only "Reopen" reopens.
+        const outcome = importStatusOutcome(store, raw);
+        const label = `${store.name} (${placeId})`;
+        if (outcome === "bad") {
+          badStatus.push(`${placeId}: "${raw}" is not Active, Closed or Reopen, status left unchanged`);
+        } else if (outcome === "keptClosed") {
+          keptClosed.push(label);
+        } else if (outcome === "close" || outcome === "reopen") {
+          const closed = outcome === "close";
+          if (applyStatus(store, closed)) {
+            if (closed) {
+              changed.closed++;
+              closedNames.push(label);
+            } else {
+              changed.reopened++;
+              reopenedNames.push(label);
+            }
+            touched = true;
+          }
         }
       }
 
@@ -286,6 +304,14 @@ export async function POST(request: NextRequest) {
         `${changed.name} name, ${changed.province} province, ${changed.region} region, ` +
         `${changed.closed} closed, ${changed.reopened} reopened). ` +
         `No rep or role data read.`,
+      details:
+        [
+          closedNames.length && `Closed: ${closedNames.join("; ")}`,
+          reopenedNames.length && `Reopened: ${reopenedNames.join("; ")}`,
+          keptClosed.length && `Left closed (file said Active, not Reopen): ${keptClosed.join("; ")}`,
+        ]
+          .filter(Boolean)
+          .join("\n") || undefined,
     });
 
     return NextResponse.json({
@@ -317,6 +343,10 @@ export async function POST(request: NextRequest) {
       ].filter(Boolean) as string[],
       badStatus: badStatus.slice(0, 25),
       badStatusCount: badStatus.length,
+      closedStores: closedNames.slice(0, 50),
+      reopenedStores: reopenedNames.slice(0, 50),
+      keptClosed: keptClosed.slice(0, 50),
+      keptClosedCount: keptClosed.length,
       gpsHalfPresent,
       unmatchedCount: unmatched.length,
       unmatched: unmatched.slice(0, 25),

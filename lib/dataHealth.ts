@@ -119,9 +119,11 @@ function issue(
   summary: string,
   action: string,
   columns: string[],
-  rows: (string | number)[][]
+  rows: (string | number)[][],
+  /** When the rows list more than the problems (a duplicate group lists its KEEP row too). */
+  count: number = rows.length
 ): HealthIssue {
-  return { id, title, severity, count: rows.length, summary, action, columns, rows };
+  return { id, title, severity, count, summary, action, columns, rows };
 }
 
 /** Said once, used by every check whose fix is store data. */
@@ -449,11 +451,15 @@ export function buildDataHealthReport(input: HealthInput): DataHealthReport {
 
   // ── 11. The same shop recorded more than once ────────────────────────
   {
-    const { groups } = buildDuplicateGroups(stores);
+    // Over EVERY store, and counted as the records Remove duplicates would
+    // delete, so this number and that button always agree. Closed stores are
+    // included here (unlike the other checks) because the button includes
+    // them: a closed copy of an open shop is still a duplicate to remove.
+    const { groups, removeIds } = buildDuplicateGroups(allStores);
     const rows: (string | number)[][] = [];
     for (const g of groups) {
       for (const r of g.records) {
-        rows.push([g.storeName, g.repCode, r.placeId, channelName(r.channelId), r.gpsLat || "", r.gpsLng || "", r.keep ? "KEEP" : "duplicate", g.records.length]);
+        rows.push([g.storeName, g.repCode, r.placeId, channelName(r.channelId), r.gpsLat || "", r.gpsLng || "", r.closed ? "Closed" : "Active", r.keep ? "KEEP" : "duplicate", g.records.length]);
       }
     }
     issues.push(
@@ -462,9 +468,10 @@ export function buildDataHealthReport(input: HealthInput): DataHealthReport {
         "Duplicate store records",
         "warning",
         "The same shop appears more than once under one rep, so it is visited twice in a cycle and inflates every count, every capacity figure and the driving time.",
-        "Use the Duplicate Stores page to collapse each group to the best record.",
-        ["STORE NAME", "REP CODE", "PLACE ID", "CHANNEL", "GPS LATITUDE", "GPS LONGITUDE", "VERDICT", "IN GROUP"],
-        rows
+        "Use the Duplicate Stores page to collapse each group to the best record. The count is how many records Remove duplicates would delete.",
+        ["STORE NAME", "REP CODE", "PLACE ID", "CHANNEL", "GPS LATITUDE", "GPS LONGITUDE", "STATUS", "VERDICT", "IN GROUP"],
+        rows,
+        removeIds.size
       )
     );
   }

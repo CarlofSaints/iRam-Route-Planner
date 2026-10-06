@@ -504,7 +504,8 @@ export default function StoresPage() {
         "GPS LONGITUDE",
         "GPS PROBLEM",
         // Active / Closed. Read back by Import Excel, so a store can be closed
-        // or reopened in bulk; a blank cell there changes nothing.
+        // ("Closed") or reopened ("Reopen") in bulk. "Active" never reopens a
+        // store that has been closed since, and a blank cell changes nothing.
         "STATUS",
         "REPRESENTATIVE ID",
         "REPRESENTATIVE NAME",
@@ -589,7 +590,8 @@ export default function StoresPage() {
         ["", "Import Excel on the Stores page reads PLACE ID, PLACE NAME, CHANNEL, PROVINCE, REGION, GPS LATITUDE, GPS LONGITUDE and STATUS: store details only. It never reads a rep, visit role or team column, so the personnel columns can be wrong, or deleted entirely, without any effect. Correcting GPS LATITUDE and GPS LONGITUDE and importing here is the bulk way to fix the stores listed under GPS PROBLEM."],
         ["", "It updates existing stores only, matched on PLACE ID, and it will not create a channel. A channel name that matches nothing is reported and that store keeps the channel it has. Rows whose PLACE ID is not already in the system are listed back, not created."],
         ["", "A column you DELETE from this file is left untouched on every store. A column you keep but leave BLANK clears that field, which is how a wrong coordinate is removed in bulk."],
-        ["", "STATUS is the exception: type Closed or Active to change a store, and a BLANK status cell changes nothing. A closed store is left out of every call cycle until it is set back to Active."],
+        ["", "STATUS is the exception: type Closed to close a store, and a BLANK status cell changes nothing. A closed store is left out of every call cycle until it is reopened."],
+        ["", "To reopen a closed store, type Reopen in its STATUS cell. Active does NOT reopen a store, so an older copy of this file sent back after a store was closed leaves it closed. The import lists every store it closed or reopened, and any closed store the file called Active."],
         ["", "It does NOT read FREQUENCY, DURATION, DAY or WEEK. Those come from the Channels page or from editing a store, and a change made in this file will not come back in."],
         ["", "Store Upload (under Admin) is the other door: use it to ADD stores or to load rep and visit-role assignments. It writes the personnel columns, so only send it a file where those are correct."],
         ["", extraRoles.length
@@ -1203,7 +1205,11 @@ export default function StoresPage() {
               {sorted.length === 0 && (
                 <tr>
                   <td colSpan={visibleColumns.length} className="px-6 py-8 text-center text-gray-400">
-                    {onlyUnrouted && unroutedCount === 0
+                    {/* Until the routes are in, every store looks unrouted-free,
+                        and claiming they are all in a cycle would be false. */}
+                    {onlyUnrouted && !cycleLoaded
+                      ? "Loading the call cycles to find the stores not in one..."
+                      : onlyUnrouted && unroutedCount === 0
                       ? "Every store these filters leave is in a sales cycle, closed, or in a channel nobody calls on."
                       : "No store matches these filters."}
                   </td>

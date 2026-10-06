@@ -14,9 +14,25 @@ import {
   StoreOverride,
 } from "@/lib/types";
 import { resolveRoleDefault, roleCallsOnChannel, withRoleEnabled } from "@/lib/repStores";
-import { isRepChannel, storeCountsByChannel } from "@/lib/routable";
+import {
+  isRepChannel,
+  storeCountsByChannel,
+  switchOffImpact,
+  switchOffSentence,
+  describeCalledOnChange,
+  type CalledOnChange,
+} from "@/lib/routable";
+import { canEdit } from "@/lib/roles";
+import { useSession } from "@/components/SessionProvider";
 import { useColumnWidths } from "@/components/useColumnWidths";
 import { useTableSort, useSortedRows, SortableTh } from "@/components/TableSort";
+
+/** The server's own words for a failed write, or a plain fallback with the status. */
+async function errorFrom(res: Response, fallback: string): Promise<string> {
+  const data = await res.json().catch(() => null);
+  const msg = data && typeof data.error === "string" ? data.error : "";
+  return msg || `${fallback} (HTTP ${res.status}).`;
+}
 
 /**
  * Column widths are user-draggable, so they cannot live in Tailwind classes:
@@ -44,6 +60,10 @@ const durKey = (roleId: string) => `${roleId}:dur`;
 const callsKey = (roleId: string) => `${roleId}:calls`;
 
 export default function ChannelsPage() {
+  const { session } = useSession();
+  // The API refuses these writes for other roles (lib/editGuard.ts); this
+  // only stops the page offering controls that would be refused.
+  const mayEdit = canEdit(session?.role, "channels");
   const [channels, setChannels] = useState<Channel[]>([]);
   const [visitRoles, setVisitRoles] = useState<VisitRole[]>(DEFAULT_VISIT_ROLES);
   const [loading, setLoading] = useState(true);
@@ -56,7 +76,7 @@ export default function ChannelsPage() {
   const [newDuration, setNewDuration] = useState(30);
   const [adding, setAdding] = useState(false);
   const [importing, setImporting] = useState(false);
-  const [importMsg, setImportMsg] = useState<{ text: string; type: "success" | "error" } | null>(null);
+  const [importMsg, setImportMsg] = useState<{ text: string; type: "success" | "error"; lines?: string[] } | null>(null);
   const [search, setSearch] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -74,6 +94,30 @@ export default function ChannelsPage() {
   // Stores and overrides, only to count what a channel switch would affect.
   const [stores, setStores] = useState<Store[]>([]);
   const [overrides, setOverrides] = useState<StoreOverride[]>([]);
+  // Whether those counts can be trusted. Before they load (or when the load
+  // failed) every channel would read as "0 stores will leave", which is the
+  // one number that must never be shown by accident.
+  const [countsState, setCountsState] = useState<"loading" | "loaded" | "failed">("loading");
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  /**
+   * One write at a time on this page. Every save sends the server a change
+   * that it applies to the whole channel list, so a second click while the
+   * first is in flight used to let one overwrite the other. While anything is
+   * saving, every switch and save button waits.
+   */
+  const writing = togglingKey !== null || saving || adding || bulkDeleting || deletingId !== null || importing || applyBusy;
+  // The same guard, synchronously: two clicks inside one render would both
+  // see `writing` as false.
+  const inFlight = useRef(false);
+  const beginWrite = () => {
+    if (inFlight.current) return false;
+    inFlight.current = true;
+    return true;
+  };
+  const endWrite = () => {
+    inFlight.current = false;
+  };
 
   /**
    * Default width of every leaf column, including one set per visit role.
@@ -148,7 +192,9 @@ export default function ChannelsPage() {
     on: boolean,
     onChange: (next: boolean) => void,
     label: string,
-    busy: boolean
+    busy: boolean,
+    /** Not clickable right now (another save in flight, or no permission), without greying it out. */
+    locked = false
   ) => (
     <button
       type="button"
@@ -156,11 +202,11 @@ export default function ChannelsPage() {
       aria-checked={on}
       aria-label={label}
       title={label}
-      disabled={busy}
+      disabled={busy || locked}
       onClick={() => onChange(!on)}
-      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-iram-green focus:ring-offset-1 disabled:opacity-40 ${
-        on ? "bg-iram-green" : "bg-gray-300"
-      }`}
+      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-iram-green focus:ring-offset-1 disabled:cursor-not-allowed ${
+        busy ? "opacity-40" : ""
+      } ${on ? "bg-iram-green" : "bg-gray-300"}`}
     >
       <span
         className={`inline-block h-4 w-4 transform rounded-full bg-white shadow transition-transform ${
@@ -190,6 +236,7 @@ export default function ChannelsPage() {
       return;
     }
 
+    if (!beginWrite()) return;
     const key = `${ch.id}:${role.id}`;
     const before = ch.roleDefaults;
     const roleDefaults = withRoleEnabled(before, role, next);
@@ -202,17 +249,18 @@ export default function ChannelsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: ch.id, roleDefaults }),
       });
-      if (!res.ok) throw new Error(String(res.status));
-    } catch {
+      if (!res.ok) throw new Error(await errorFrom(res, "The server refused it"));
+    } catch (err) {
       setChannels((prev) =>
         prev.map((c) => (c.id === ch.id ? { ...c, roleDefaults: before } : c))
       );
       setImportMsg({
         type: "error",
-        text: `Could not save ${role.name} on ${ch.name}. The switch has been put back.`,
+        text: `Could not save ${role.name} on ${ch.name}: ${err instanceof Error ? err.message : "network error"} The switch has been put back.`,
       });
     } finally {
       setTogglingKey(null);
+      endWrite();
     }
   };
 
@@ -225,17 +273,25 @@ export default function ChannelsPage() {
    */
   const setCalledOn = async (ch: Channel, next: boolean) => {
     if (!next) {
-      const c = storeCounts.get(ch.id);
-      const open = c?.open ?? 0;
-      const excused = c?.excused ?? 0;
-      const kept = excused > 0 ? ` ${excused} with an approved Call Override stay in.` : "";
+      // Never confirm with a count that has not loaded: it would say 0.
+      if (countsState !== "loaded") {
+        setImportMsg({
+          type: "error",
+          text:
+            countsState === "failed"
+              ? `Could not load the store counts, so ${ch.name} cannot be switched off safely. Reload the page and try again.`
+              : `Still counting the stores in ${ch.name}. Try again in a moment.`,
+        });
+        return;
+      }
       if (
         !confirm(
-          `Switch off "Called on?" for ${ch.name}?\n\n${open} open store${open === 1 ? "" : "s"} in this channel will leave every call cycle (sales, QC and training) at the next route generation.${kept}`
+          `Switch off "Called on?" for ${ch.name}?\n\n${switchOffSentence(switchOffImpact(storeCounts.get(ch.id)))} (sales, QC and training) at the next route generation.`
         )
       )
         return;
     }
+    if (!beginWrite()) return;
     const key = `${ch.id}:calledOn`;
     const before = ch.notARepChannel;
     setTogglingKey(key);
@@ -246,30 +302,41 @@ export default function ChannelsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ id: ch.id, notARepChannel: !next }),
       });
-      if (!res.ok) throw new Error(String(res.status));
+      if (!res.ok) throw new Error(await errorFrom(res, "The server refused it"));
       setImportMsg({
         type: "success",
         text: next
           ? `${ch.name} is called on again. Regenerate routes to bring its stores back into the cycles.`
           : `${ch.name} is no longer called on. Regenerate routes to take its stores out of the cycles.`,
       });
-    } catch {
+    } catch (err) {
       setChannels((prev) => prev.map((c) => (c.id === ch.id ? { ...c, notARepChannel: before } : c)));
-      setImportMsg({ type: "error", text: `Could not save Called on? for ${ch.name}. The switch has been put back.` });
+      setImportMsg({
+        type: "error",
+        text: `Could not save Called on? for ${ch.name}: ${err instanceof Error ? err.message : "network error"} The switch has been put back.`,
+      });
     } finally {
       setTogglingKey(null);
+      endWrite();
     }
   };
 
   const load = () => {
-    // Counts only; the page works without them.
-    Promise.all([
-      fetch("/api/stores").then((r) => r.json()).catch(() => []),
-      fetch("/api/store-overrides").then((r) => r.json()).catch(() => ({ overrides: [] })),
-    ]).then(([st, ov]) => {
-      setStores(Array.isArray(st) ? st : []);
-      setOverrides(Array.isArray(ov?.overrides) ? ov.overrides : []);
-    });
+    // Counts only; the page works without them, but switching a channel off
+    // waits for them (see setCalledOn), so a failure is recorded, not hidden.
+    setCountsState("loading");
+    const json = async (r: Response) => {
+      if (!r.ok) throw new Error(String(r.status));
+      return r.json();
+    };
+    Promise.all([fetch("/api/stores").then(json), fetch("/api/store-overrides").then(json)])
+      .then(([st, ov]) => {
+        if (!Array.isArray(st)) throw new Error("stores");
+        setStores(st);
+        setOverrides(Array.isArray(ov?.overrides) ? ov.overrides : []);
+        setCountsState("loaded");
+      })
+      .catch(() => setCountsState("failed"));
     Promise.all([
       fetch("/api/channels").then((r) => r.json()).catch(() => []),
       fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
@@ -349,16 +416,34 @@ export default function ChannelsPage() {
   };
 
   const saveEdit = async (id: string) => {
+    if (!beginWrite()) return;
     setSaving(true);
-    const res = await fetch("/api/channels", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, ...editData }),
-    });
+    let res: Response;
+    try {
+      res = await fetch("/api/channels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, ...editData }),
+      });
+    } catch {
+      setSaving(false);
+      endWrite();
+      setImportMsg({ type: "error", text: "Could not reach the server. Your edit is still open; try Save again." });
+      return;
+    }
+    if (!res.ok) {
+      // The row stays open with what was typed, so nothing is lost.
+      const why = await errorFrom(res, "The channel was not saved");
+      setSaving(false);
+      endWrite();
+      setImportMsg({ type: "error", text: `Not saved: ${why}` });
+      return;
+    }
     const data = await res.json().catch(() => ({}));
     setEditing(null);
     setEditData({});
     setSaving(false);
+    endWrite();
     // Say what happened to the STORES. A channel edit that reports nothing is
     // how "BUCO is set to 120 minutes but every store still says 30" went
     // unnoticed for so long.
@@ -392,6 +477,7 @@ export default function ChannelsPage() {
   };
 
   const applyDefaults = async () => {
+    if (!beginWrite()) return;
     setApplyBusy(true);
     try {
       const res = await fetch("/api/channels/apply-defaults", {
@@ -399,50 +485,87 @@ export default function ChannelsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ protectManualEdits: true }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       setImportMsg(
         res.ok
           ? {
               type: "success",
               text: `Applied channel defaults to ${data.storesUpdated} store(s). ${data.keptOverridden} kept an existing override; ${data.overridesCreated} manual edit(s) preserved.`,
             }
-          : { type: "error", text: data.error || "Failed to apply defaults" }
+          : { type: "error", text: data.error || `Failed to apply defaults (HTTP ${res.status}).` }
       );
       setApplyPreview(null);
+    } catch {
+      setImportMsg({ type: "error", text: "Failed to apply defaults: could not reach the server." });
     } finally {
       setApplyBusy(false);
+      endWrite();
     }
   };
 
   const addChannel = async () => {
     if (!newName.trim()) return;
+    if (!beginWrite()) return;
     setAdding(true);
-    await fetch("/api/channels", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: newName.trim(), frequency: newFreq, duration: newDuration }),
-    });
-    setNewName("");
-    setNewFreq("monthly");
-    setNewDuration(30);
-    setShowAdd(false);
-    setAdding(false);
-    load();
+    try {
+      const res = await fetch("/api/channels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: newName.trim(), frequency: newFreq, duration: newDuration }),
+      });
+      if (!res.ok) {
+        // The form stays open with what was typed.
+        setImportMsg({ type: "error", text: `Channel not added: ${await errorFrom(res, "The server refused it")}` });
+        return;
+      }
+      setNewName("");
+      setNewFreq("monthly");
+      setNewDuration(30);
+      setShowAdd(false);
+      load();
+    } catch {
+      setImportMsg({ type: "error", text: "Channel not added: could not reach the server." });
+    } finally {
+      setAdding(false);
+      endWrite();
+    }
   };
 
   const deleteChannel = async (id: string, name: string) => {
+    const c = storeCounts.get(id);
+    if (countsState === "loaded" && c && c.total > 0) {
+      setImportMsg({
+        type: "error",
+        text: `${name} still has ${c.total.toLocaleString("en-ZA")} store${c.total === 1 ? "" : "s"}. Move them to another channel before deleting it.`,
+      });
+      return;
+    }
     if (!confirm(`Delete channel "${name}"? This cannot be undone.`)) return;
-    await fetch("/api/channels", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    setSelected((prev) => {
-      const next = new Set(prev);
-      next.delete(id);
-      return next;
-    });
-    load();
+    if (!beginWrite()) return;
+    setDeletingId(id);
+    try {
+      const res = await fetch("/api/channels", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        setImportMsg({ type: "error", text: await errorFrom(res, `${name} was not deleted`) });
+        return;
+      }
+      setSelected((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+      setImportMsg({ type: "success", text: `Deleted ${name}.` });
+      load();
+    } catch {
+      setImportMsg({ type: "error", text: `${name} was not deleted: could not reach the server.` });
+    } finally {
+      setDeletingId(null);
+      endWrite();
+    }
   };
 
   /** Stores per channel, counted BEFORE anyone flips a switch. */
@@ -478,21 +601,33 @@ export default function ChannelsPage() {
         <td
           className={`px-3 py-3 text-right border-b border-gray-100 tabular-nums ${on ? "text-gray-700" : "text-gray-400"}`}
           title={
-            c
+            countsState !== "loaded"
+              ? countsState === "failed"
+                ? "Could not load the store counts"
+                : "Counting stores..."
+              : c
               ? `${c.total} store${c.total === 1 ? "" : "s"}: ${c.open} open${c.excused ? `, ${c.excused} kept in the cycle by a Call Override` : ""}`
               : "No stores in this channel"
           }
         >
-          {(c?.total ?? 0).toLocaleString("en-ZA")}
+          {countsState === "loaded" ? (c?.total ?? 0).toLocaleString("en-ZA") : "..."}
         </td>
         <td className="px-3 py-3 text-center border-b border-gray-100">
           {renderToggle(
             on,
             (next) => setCalledOn(ch, next),
-            on
+            !mayEdit
+              ? `Your role can't change channels. ${on ? `Reps call on ${ch.name}.` : `Nobody calls on ${ch.name}.`}`
+              : on && countsState === "failed"
+              ? `Could not load the store counts, so ${ch.name} cannot be switched off safely. Reload the page.`
+              : on && countsState === "loading"
+              ? `Counting the stores in ${ch.name} before it can be switched off...`
+              : on
               ? `Reps call on ${ch.name}. Switch off if nobody visits this channel.`
               : `Nobody calls on ${ch.name}. Its stores are out of every call cycle.`,
-            togglingKey === `${ch.id}:calledOn`
+            togglingKey === `${ch.id}:calledOn`,
+            // Switching OFF waits for the counts, so its confirm never says 0 by accident.
+            !mayEdit || writing || (on && countsState !== "loaded")
           )}
           {!on && <div className="text-[10px] text-gray-400 mt-0.5">Not called on</div>}
         </td>
@@ -544,18 +679,36 @@ export default function ChannelsPage() {
     const ids = Array.from(selected);
     if (ids.length === 0) return;
     if (!confirm(`Delete ${ids.length} channel${ids.length > 1 ? "s" : ""}? This cannot be undone.`)) return;
+    if (!beginWrite()) return;
     setBulkDeleting(true);
-    await fetch("/api/channels", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ids }),
-    });
-    setSelected(new Set());
-    setBulkDeleting(false);
-    load();
+    try {
+      const res = await fetch("/api/channels", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ids }),
+      });
+      if (!res.ok) {
+        // All or nothing: the server deletes none when any still has stores.
+        setImportMsg({ type: "error", text: await errorFrom(res, "No channels were deleted") });
+        return;
+      }
+      const data = await res.json().catch(() => ({}));
+      setSelected(new Set());
+      setImportMsg({ type: "success", text: `Deleted ${data.deleted ?? ids.length} channel${(data.deleted ?? ids.length) === 1 ? "" : "s"}.` });
+      load();
+    } catch {
+      setImportMsg({ type: "error", text: "No channels were deleted: could not reach the server." });
+    } finally {
+      setBulkDeleting(false);
+      endWrite();
+    }
   };
 
   const handleImport = async (file: File) => {
+    if (!beginWrite()) {
+      if (fileRef.current) fileRef.current.value = "";
+      return;
+    }
     setImporting(true);
     setImportMsg(null);
     try {
@@ -572,15 +725,26 @@ export default function ChannelsPage() {
       if (data.created) parts.push(`${data.created} created`);
       if (data.errors?.length) parts.push(`${data.errors.length} error${data.errors.length > 1 ? "s" : ""}`);
       if (!data.updated && !data.created && !data.errors?.length) parts.push("No changes");
+      // A "Reps Call Here" change moves whole channels in or out of every
+      // cycle, so each one is listed with its store count, never folded into
+      // "N updated".
+      const flips: CalledOnChange[] = Array.isArray(data.calledOnChanges) ? data.calledOnChanges : [];
       setImportMsg({
         text: parts.join(", ") + (data.errors?.length ? ": " + data.errors.join("; ") : ""),
         type: data.errors?.length && !data.updated && !data.created ? "error" : "success",
+        lines: flips.length
+          ? [
+              ...flips.map(describeCalledOnChange),
+              "Regenerate routes on the Routes page for this to reach the call cycles.",
+            ]
+          : undefined,
       });
       load();
     } catch {
       setImportMsg({ text: "Import failed", type: "error" });
     } finally {
       setImporting(false);
+      endWrite();
       if (fileRef.current) fileRef.current.value = "";
     }
   };
@@ -610,8 +774,10 @@ export default function ChannelsPage() {
           >
             Export Excel
           </a>
+          {mayEdit && (
+          <>
           <label
-            className={`px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 cursor-pointer transition-colors ${importing ? "opacity-50 pointer-events-none" : ""}`}
+            className={`px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 cursor-pointer transition-colors ${writing ? "opacity-50 pointer-events-none" : ""}`}
           >
             {importing ? "Importing..." : "Import Excel"}
             <input
@@ -627,7 +793,7 @@ export default function ChannelsPage() {
           </label>
           <button
             onClick={previewDefaults}
-            disabled={applyBusy}
+            disabled={writing}
             className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 disabled:opacity-50 transition-colors"
             title="Push every channel's frequency and duration onto its stores"
           >
@@ -642,6 +808,8 @@ export default function ChannelsPage() {
             </svg>
             Add Channel
           </button>
+          </>
+          )}
         </div>
       </div>
 
@@ -654,8 +822,29 @@ export default function ChannelsPage() {
               : "bg-red-50 text-red-700"
           }`}
         >
-          <span>{importMsg.text}</span>
-          <button onClick={() => setImportMsg(null)} className="text-xs opacity-60 hover:opacity-100 ml-4">dismiss</button>
+          <div>
+            <span>{importMsg.text}</span>
+            {importMsg.lines && importMsg.lines.length > 0 && (
+              <ul className="mt-1.5 list-disc list-inside space-y-0.5 text-xs font-medium text-amber-800">
+                {importMsg.lines.map((l, i) => (
+                  <li key={i}>{l}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <button onClick={() => setImportMsg(null)} className="text-xs opacity-60 hover:opacity-100 ml-4 self-start">dismiss</button>
+        </div>
+      )}
+
+      {countsState === "failed" && (
+        <div className="p-3 rounded-lg text-sm mb-6 flex items-center justify-between bg-red-50 text-red-700">
+          <span>
+            Could not load the store counts. The Stores column may be wrong, and no channel can be
+            switched off until they load.
+          </span>
+          <button onClick={load} className="text-xs font-medium underline ml-4 whitespace-nowrap">
+            Load the counts again
+          </button>
         </div>
       )}
 
@@ -712,7 +901,7 @@ export default function ChannelsPage() {
               <div className="flex gap-3">
                 <button
                   onClick={applyDefaults}
-                  disabled={applyBusy}
+                  disabled={writing}
                   className="px-4 py-2 bg-iram-green text-white text-sm font-medium rounded-lg hover:bg-iram-green-dark disabled:opacity-50"
                 >
                   {applyBusy ? "Applying..." : `Apply to ${applyPreview.wouldChange} store(s)`}
@@ -769,7 +958,7 @@ export default function ChannelsPage() {
           <div className="flex gap-3 mt-4">
             <button
               onClick={addChannel}
-              disabled={adding || !newName.trim()}
+              disabled={writing || !newName.trim()}
               className="px-4 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
             >
               {adding ? "Saving..." : "Save Channel"}
@@ -817,12 +1006,12 @@ export default function ChannelsPage() {
           </button>
         )}
 
-        {selected.size > 0 && (
+        {mayEdit && selected.size > 0 && (
           <div className="flex items-center gap-3 sm:ml-auto bg-gray-50 border border-gray-200 rounded-lg px-3 py-2">
             <span className="text-sm text-gray-600">{selected.size} selected</span>
             <button
               onClick={deleteSelected}
-              disabled={bulkDeleting}
+              disabled={writing}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-iram-green text-white text-xs font-medium rounded-lg hover:bg-iram-green-dark disabled:opacity-50 transition-colors"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1095,10 +1284,10 @@ export default function ChannelsPage() {
                       <td className="px-6 py-3 text-right space-x-2 border-b border-gray-100">
                         <button
                           onClick={() => saveEdit(ch.id)}
-                          disabled={saving}
-                          className="text-green-600 hover:text-green-800 text-xs font-medium"
+                          disabled={writing}
+                          className="text-green-600 hover:text-green-800 text-xs font-medium disabled:opacity-40"
                         >
-                          Save
+                          {saving ? "Saving..." : "Save"}
                         </button>
                         <button
                           onClick={cancelEdit}
@@ -1138,7 +1327,8 @@ export default function ChannelsPage() {
                                   calls
                                     ? `${role.name} calls on ${ch.name}. Switch off if they never visit this channel`
                                     : `${role.name} does not call on ${ch.name}`,
-                                  togglingKey === `${ch.id}:${role.id}`
+                                  togglingKey === `${ch.id}:${role.id}`,
+                                  !mayEdit || writing
                                 )}
                               </td>
                             )}
@@ -1171,18 +1361,31 @@ export default function ChannelsPage() {
                       })}
                       {renderSourceCell(ch)}
                       <td className="px-6 py-3 text-right space-x-3 border-b border-gray-100">
-                        <button
-                          onClick={() => startEdit(ch)}
-                          className="text-iram-green hover:text-red-800 text-xs font-medium"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => deleteChannel(ch.id, ch.name)}
-                          className="text-gray-400 hover:text-red-600 text-xs font-medium"
-                        >
-                          Delete
-                        </button>
+                        {mayEdit ? (
+                          <>
+                            <button
+                              onClick={() => startEdit(ch)}
+                              disabled={writing}
+                              className="text-iram-green hover:text-red-800 text-xs font-medium disabled:opacity-40"
+                            >
+                              Edit
+                            </button>
+                            <button
+                              onClick={() => deleteChannel(ch.id, ch.name)}
+                              disabled={writing}
+                              title={
+                                (storeCounts.get(ch.id)?.total ?? 0) > 0
+                                  ? "A channel that still has stores cannot be deleted. Move its stores first."
+                                  : undefined
+                              }
+                              className="text-gray-400 hover:text-red-600 text-xs font-medium disabled:opacity-40"
+                            >
+                              {deletingId === ch.id ? "Deleting..." : "Delete"}
+                            </button>
+                          </>
+                        ) : (
+                          <span className="text-xs text-gray-300">View only</span>
+                        )}
                       </td>
                     </>
                   )}

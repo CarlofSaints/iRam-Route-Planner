@@ -13,7 +13,14 @@
  * and the ones where a store is quietly counted as missing when it is not.
  */
 
-import { findNotInCycle, isCorrectlyOut, REASONS, type NotInCycleReason } from "../lib/notInCycle";
+import {
+  filterNotInCycle,
+  findNotInCycle,
+  isCorrectlyOut,
+  reasonCountsFor,
+  REASONS,
+  type NotInCycleReason,
+} from "../lib/notInCycle";
 import type {
   Channel,
   Rep,
@@ -327,6 +334,37 @@ for (const key of Object.keys(REASONS) as NotInCycleReason[]) {
     `${key} offers an action exactly when there is one`,
     isCorrectlyOut(key) ? p.action === null : typeof p.action === "string" && p.action.length > 0
   );
+}
+
+// ── The Reason dropdown counts what the OTHER filters leave ────────────────
+// It counted the unfiltered result, so "Closed (1)" was offered under "Open
+// only" and opened on an empty list.
+{
+  const stores = [store("a"), store("b", { closed: true }), store("c", { gpsLat: "", gpsLng: "" })];
+  const r = findNotInCycle({ ...base, stores, routes: null });
+  const open = reasonCountsFor(r, reps, { status: "open" });
+  const all = reasonCountsFor(r, reps, { status: "all" });
+  ok("under Open only, no closed store is counted", open.closed === 0, JSON.stringify(open));
+  ok("under Open and closed, the closed store is counted", all.closed === 1, JSON.stringify(all));
+  const shown = filterNotInCycle(r, reps, { status: "open" }).length;
+  const summed = Object.values(open).reduce((a, n) => a + n, 0);
+  ok("the counts add up to the rows the other filters show", summed === shown, `${summed} vs ${shown}`);
+  ok("a picked reason does not zero the other reasons' counts",
+    reasonCountsFor(r, reps, { status: "all", reason: "closed" }).closed === 1 && summed > 0);
+}
+
+// ── The page: Team Admins are scoped, and Save GPS stores the parsed numbers ──
+{
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  const page = fs.readFileSync(path.join(__dirname, "..", "app", "not-in-cycle", "page.tsx"), "utf8");
+  ok("the page scopes by isTeamRole, so a Team Admin sees only their team", /isTeamRole\(session\?\.role\)/.test(page));
+  ok("the page never tests the one spelling teamManager", !/role === "teamManager"/.test(page));
+  ok("Save GPS sends the validated numbers, not the box text",
+    /onSave=\{\(lat, lng\) => saveGps\(r\.store\.id, lat, lng\)\}/.test(page) && !/gpsLat: edit\.lat/.test(page));
+  ok("the reason dropdown counts follow the other filters", /reasonCounts\[r\]/.test(page) && !/result\.counts\[r\]/.test(page));
+  const entry = fs.readFileSync(path.join(__dirname, "..", "components", "CoordinateEntry.tsx"), "utf8");
+  ok("CoordinateEntry hands its validated numbers to onSave", /onSave\(check\.lat!, check\.lng!\)/.test(entry));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

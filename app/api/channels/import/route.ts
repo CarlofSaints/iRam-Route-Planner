@@ -13,6 +13,7 @@ import { requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
 import { refuseEdit } from "@/lib/editGuard";
+import { describeCalledOnChange, describeCalledOnChanges, type CalledOnChange } from "@/lib/routable";
 
 export async function POST(request: NextRequest) {
   const denied = await refuseEdit("channels");
@@ -143,6 +144,11 @@ export async function POST(request: NextRequest) {
     // Channels whose PRIMARY defaults this import touched — only these cascade
     // onto stores. Per-role defaults are read live by lib/repStores.ts instead.
     const touchedChannelIds = new Set<string>();
+    // Existing channels whose "Reps Call Here" this file flipped. Reported by
+    // name with their store counts: a No in one cell takes every store in the
+    // channel out of every call cycle, and that must never happen silently.
+    // (A NEW channel has no stores yet, so it has nothing to report.)
+    const calledOnFlipped = new Map<string, Channel>();
 
     for (let i = 0; i < rows.length; i++) {
       const row = rows[i];
@@ -206,6 +212,7 @@ export async function POST(request: NextRequest) {
         // read separately and counted as an update without triggering it.
         const roleChanged = applyRoleColumns(existing, row, i + 2);
         const calledOnChanged = applyCalledOn(existing);
+        if (calledOnChanged) calledOnFlipped.set(existing.id, existing);
         if (changed) touchedChannelIds.add(existing.id);
         if (changed || roleChanged || calledOnChanged) updated++;
       } else {
@@ -229,8 +236,14 @@ export async function POST(request: NextRequest) {
 
     let storesUpdated = 0;
     let storesPinned = 0;
+    let calledOnChanges: CalledOnChange[] = [];
     if (updated > 0 || created > 0) {
       await saveChannels(channels);
+
+      if (calledOnFlipped.size > 0) {
+        const [stores, overrides] = await Promise.all([getStores(), getStoreOverrides()]);
+        calledOnChanges = describeCalledOnChanges([...calledOnFlipped.values()], stores, overrides);
+      }
 
       // An import that changes defaults has to reach the stores too, exactly
       // as a single channel edit does.
@@ -249,8 +262,17 @@ export async function POST(request: NextRequest) {
         action: "Imported channels",
         actor: session?.email || "unknown",
         actorName: session?.name || "Unknown",
-        summary: `Imported channels: ${updated} updated, ${created} created`,
-        details: `Applied defaults to ${storesUpdated} store(s); ${storesPinned} kept their override`,
+        summary:
+          `Imported channels: ${updated} updated, ${created} created` +
+          (calledOnChanges.length
+            ? `. Called on? changed on ${calledOnChanges.length}: ${calledOnChanges
+                .map((c) => `${c.name} ${c.calledOn ? "ON" : "OFF"}`)
+                .join(", ")}`
+            : ""),
+        details: [
+          `Applied defaults to ${storesUpdated} store(s); ${storesPinned} kept their override`,
+          ...calledOnChanges.map(describeCalledOnChange),
+        ].join("\n"),
       });
     }
 
@@ -260,6 +282,7 @@ export async function POST(request: NextRequest) {
       created,
       storesUpdated,
       storesPinned,
+      calledOnChanges,
       errors,
       totalRows: rows.length,
     });

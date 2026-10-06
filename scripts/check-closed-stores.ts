@@ -22,6 +22,7 @@ import {
   setStatusByHand,
   applyStatus,
   parseStatusCell,
+  importStatusOutcome,
 } from "../lib/closedStores";
 import type { Store } from "../lib/types";
 
@@ -149,7 +150,29 @@ function store(placeId: string, extra: Partial<Store> = {}): Store {
     "if this changes to building a fresh object, closed stores silently reopen");
   const importer = read("app/api/stores/import/route.ts");
   ok("the Stores import only changes status through applyStatus", /applyStatus\(store, closed\)/.test(importer));
-  ok("the Stores import treats a blank STATUS cell as no change", /closed !== undefined && applyStatus/.test(importer));
+  ok("the Stores import decides status through importStatusOutcome", /importStatusOutcome\(store, raw\)/.test(importer));
+  ok("the Stores import never reads the raw cell as a reopen", !/parseStatusCell\(/.test(importer));
+  ok("the Stores import names the stores it closed and reopened",
+    /closedStores: closedNames/.test(importer) && /reopenedStores: reopenedNames/.test(importer));
+}
+
+// ── An old export must not reopen a store closed since ─────────────────────
+{
+  const closedNow = store("C", { closed: true, closedReason: "manual", closedAt: "2026-09-01T00:00:00.000Z" });
+  const openNow = store("O");
+  ok("Active on a CLOSED store leaves it closed", importStatusOutcome(closedNow, "Active") === "keptClosed");
+  ok("Open on a CLOSED store leaves it closed", importStatusOutcome(closedNow, "open") === "keptClosed");
+  ok("Reopen on a closed store reopens it", importStatusOutcome(closedNow, "Reopen") === "reopen");
+  ok("REOPENED in caps reopens it", importStatusOutcome(closedNow, " REOPENED ") === "reopen");
+  ok("Closed on an open store closes it", importStatusOutcome(openNow, "Closed") === "close");
+  ok("Closed on a closed store is no change", importStatusOutcome(closedNow, "Closed") === "none");
+  ok("Active on an open store is no change", importStatusOutcome(openNow, "Active") === "none");
+  ok("Reopen on an open store is no change", importStatusOutcome(openNow, "Reopen") === "none");
+  ok("a blank cell is no change", importStatusOutcome(closedNow, "") === "none");
+  ok("nonsense is reported", importStatusOutcome(closedNow, "maybe") === "bad");
+  // The round trip that used to reopen: export when open, close it, import the old file.
+  const exportedWhenOpen = "Active";
+  ok("the stale round trip leaves the store closed", importStatusOutcome(closedNow, exportedWhenOpen) !== "reopen");
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

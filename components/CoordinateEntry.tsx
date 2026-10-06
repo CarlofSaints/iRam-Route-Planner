@@ -31,8 +31,15 @@ interface Props {
   lat: string;
   lng: string;
   onChange: (lat: string, lng: string) => void;
-  onSave: () => void;
+  /**
+   * Called with the VALIDATED numbers. Save these, not the box text: the check
+   * cleans what was typed ("- 26.1" reads as -26.1), so the raw text can pass
+   * here and still be unparseable everywhere else once stored.
+   */
+  onSave: (lat: number, lng: number) => void;
   saving?: boolean;
+  /** Save is unavailable for now (another row is saving), without saying "Saving...". */
+  locked?: boolean;
   /** Shown above the boxes, e.g. the store name. */
   label?: string;
   compact?: boolean;
@@ -48,6 +55,7 @@ export function CoordinateEntry({
   onChange,
   onSave,
   saving,
+  locked,
   label,
   compact,
   storeName,
@@ -116,9 +124,17 @@ export function CoordinateEntry({
           </button>
         )}
         <button
-          onClick={onSave}
-          disabled={!ready || saving}
-          title={ready ? undefined : "Enter a valid South African coordinate first"}
+          onClick={() => {
+            if (ready) onSave(check.lat!, check.lng!);
+          }}
+          disabled={!ready || saving || locked}
+          title={
+            !ready
+              ? "Enter a valid South African coordinate first"
+              : locked && !saving
+              ? "Another store's GPS is saving. Wait for it to finish."
+              : undefined
+          }
           className="px-3 py-1.5 bg-iram-green text-white rounded text-xs font-medium hover:bg-iram-green-dark disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {saving ? "Saving..." : "Save GPS"}

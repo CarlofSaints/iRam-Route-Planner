@@ -127,3 +127,85 @@ export function storeCountsByChannel(
   }
   return out;
 }
+
+/**
+ * What switching a channel's "Called on?" OFF would do, from its counts.
+ *
+ * `open` includes the stores an approved Call Override keeps in the cycle, so
+ * quoting `open` as "will leave" overstates it. Split here so the confirm, the
+ * import result and the log all say the same two numbers.
+ */
+export function switchOffImpact(c: { open: number; excused: number } | undefined): {
+  leaving: number;
+  kept: number;
+} {
+  const open = c?.open ?? 0;
+  const kept = Math.min(c?.excused ?? 0, open);
+  return { leaving: open - kept, kept };
+}
+
+/** "N open stores will leave every call cycle, M kept in by a Call Override". */
+export function switchOffSentence(impact: { leaving: number; kept: number }): string {
+  const s = (n: number) => (n === 1 ? "" : "s");
+  const base = `${impact.leaving} open store${s(impact.leaving)} will leave every call cycle`;
+  return impact.kept > 0 ? `${base}, ${impact.kept} kept in by a Call Override` : base;
+}
+
+/**
+ * The channels in `ids` that still have stores filed under them, with the count.
+ *
+ * A channel must not be deleted while it holds stores. Its stores would point at
+ * a channel that no longer exists, and `isRepChannel(undefined)` is true on
+ * purpose, so a switched-off channel's stores would quietly rejoin every cycle.
+ * Closed stores count too: reopening one would bring the same problem back.
+ */
+export function channelsStillHoldingStores(
+  ids: Iterable<string>,
+  stores: Pick<Store, "channelId">[]
+): { id: string; stores: number }[] {
+  const wanted = new Set(ids);
+  const counts = new Map<string, number>();
+  for (const s of stores) {
+    if (wanted.has(s.channelId)) counts.set(s.channelId, (counts.get(s.channelId) ?? 0) + 1);
+  }
+  return [...wanted].filter((id) => counts.has(id)).map((id) => ({ id, stores: counts.get(id)! }));
+}
+
+export interface CalledOnChange {
+  id: string;
+  name: string;
+  /** The new value: true = switched back on, false = switched off. */
+  calledOn: boolean;
+  /** Open stores leaving (switched off) or returning (switched on), override-kept ones excluded. */
+  openStores: number;
+  /** Open stores an approved Call Override keeps in the cycle either way. */
+  keptByOverride: number;
+}
+
+/**
+ * Describe channels whose "Called on?" a bulk write flipped, with what that does
+ * to their stores. An import that silently switches a channel off takes
+ * hundreds of stores out of every cycle without anybody having seen a number.
+ */
+export function describeCalledOnChanges(
+  changed: Channel[],
+  stores: Store[],
+  overrides: StoreOverride[]
+): CalledOnChange[] {
+  const counts = storeCountsByChannel(stores, overrides);
+  return changed.map((ch) => {
+    // Counted for both directions the same way: the stores an override does
+    // NOT already keep in are the ones that leave (off) or return (on).
+    const { leaving, kept } = switchOffImpact(counts.get(ch.id));
+    return { id: ch.id, name: ch.name, calledOn: isRepChannel(ch), openStores: leaving, keptByOverride: kept };
+  });
+}
+
+/** One line per flipped channel, for the import result and the activity log. */
+export function describeCalledOnChange(c: CalledOnChange): string {
+  const s = (n: number) => (n === 1 ? "" : "s");
+  const kept = c.keptByOverride > 0 ? ` (${c.keptByOverride} kept in by a Call Override either way)` : "";
+  return c.calledOn
+    ? `${c.name}: Called on? switched ON. ${c.openStores} open store${s(c.openStores)} return to the call cycles at the next route generation${kept}.`
+    : `${c.name}: Called on? switched OFF. ${c.openStores} open store${s(c.openStores)} leave every call cycle at the next route generation${kept}.`;
+}

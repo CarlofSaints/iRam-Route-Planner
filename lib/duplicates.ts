@@ -1,4 +1,5 @@
 import { Store } from "./types";
+import { isClosed } from "./closedStores";
 
 // Group key: same store name + same rep = the same physical store.
 export function dupGroupKey(s: Store): string {
@@ -30,7 +31,20 @@ export interface DupRecord {
   channelId: string;
   gpsLat: string;
   gpsLng: string;
+  closed: boolean;
   keep: boolean;
+}
+
+/**
+ * Should `a` be kept over `b`?
+ *
+ * 🔴 An OPEN record always beats a closed one, whatever their scores. Keeping a
+ * closed copy and deleting the open one takes a working shop out of every call
+ * cycle, and nothing on screen says it happened.
+ */
+export function betterToKeep(a: Store, b: Store): boolean {
+  if (isClosed(a) !== isClosed(b)) return !isClosed(a);
+  return scoreStore(a) > scoreStore(b);
 }
 
 export interface DupGroup {
@@ -57,7 +71,7 @@ export function buildDuplicateGroups(
   for (const [key, recs] of byKey) {
     if (recs.length < 2) continue;
     let keep = recs[0];
-    for (const r of recs) if (scoreStore(r) > scoreStore(keep)) keep = r;
+    for (const r of recs) if (betterToKeep(r, keep)) keep = r;
     for (const r of recs) if (r.id !== keep.id) removeIds.add(r.id);
 
     groups.push({
@@ -71,6 +85,7 @@ export function buildDuplicateGroups(
         channelId: r.channelId,
         gpsLat: r.gpsLat,
         gpsLng: r.gpsLng,
+        closed: isClosed(r),
         keep: r.id === keep.id,
       })),
     });

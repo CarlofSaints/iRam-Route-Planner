@@ -9,6 +9,7 @@
  */
 
 import { buildDataHealthReport, gpsProblem, HealthIssue } from "../lib/dataHealth";
+import { buildDuplicateGroups } from "../lib/duplicates";
 import { Channel, Rep, Store, StoreOverride } from "../lib/types";
 
 let passed = 0;
@@ -144,7 +145,29 @@ console.log("\n--- checks fire when they should ---\n");
 {
   const dup = { name: "Same Shop", repCode: "GAU001" };
   const r = run([rep({ code: "GAU001" })], [store({ ...dup, placeId: "P1" }), store({ ...dup, placeId: "P2" })]);
-  ok("the same shop recorded twice is caught", find(r, "stores-duplicates").count >= 2);
+  ok("the same shop recorded twice is caught", find(r, "stores-duplicates").count >= 1);
+}
+{
+  // 🔴 The closed copy has the better coordinate. Remove duplicates used to
+  // keep it and delete the open one, taking a working shop out of the cycle.
+  const dup = { name: "Same Shop", repCode: "GAU001" };
+  const openBadGps = store({ ...dup, id: "open", placeId: "P1", gpsLat: "", gpsLng: "" });
+  const closedGoodGps = store({ ...dup, id: "shut", placeId: "P2", closed: true, closedReason: "manual", province: "Gauteng" });
+  const { groups, removeIds } = buildDuplicateGroups([closedGoodGps, openBadGps]);
+  eq("an open record is always kept over a closed one", groups[0]?.keepId, "open");
+  eq("and the closed one is what goes", [...removeIds], ["shut"]);
+  const both = [store({ ...dup, id: "a", placeId: "P1", gpsLat: "" }), store({ ...dup, id: "b", placeId: "P2" })];
+  eq("between two open records the better coordinate still wins", buildDuplicateGroups(both).groups[0]?.keepId, "b");
+
+  // Data Health and the Remove duplicates button count the same thing.
+  const three = [
+    store({ ...dup, id: "x1", placeId: "X1" }),
+    store({ ...dup, id: "x2", placeId: "X2" }),
+    store({ ...dup, id: "x3", placeId: "X3", closed: true }),
+  ];
+  const r = run([rep({ code: "GAU001" })], three);
+  eq("Data Health counts the records Remove duplicates would delete", find(r, "stores-duplicates").count, buildDuplicateGroups(three).removeIds.size);
+  eq("...which includes a closed copy, as the button does", find(r, "stores-duplicates").count, 2);
 }
 
 console.log("\n--- and stay quiet when they should ---\n");

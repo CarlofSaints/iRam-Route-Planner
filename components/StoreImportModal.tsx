@@ -32,6 +32,12 @@ type ImportResult = {
   };
   badStatus?: string[];
   badStatusCount?: number;
+  /** "Store name (Place ID)" of every store this import closed / reopened. */
+  closedStores?: string[];
+  reopenedStores?: string[];
+  /** Closed stores the file called Active: left closed, because only Reopen reopens. */
+  keptClosed?: string[];
+  keptClosedCount?: number;
   noIdRows?: number;
   columnsRead?: string[];
   columnsAbsent?: string[];
@@ -80,7 +86,7 @@ export default function StoreImportModal({
         setResult({ error: data.error || "Import failed", fileHeaders: data.fileHeaders });
       }
     } catch {
-      setResult({ error: "Could not read that file — close it in Excel and try again." });
+      setResult({ error: "Could not read that file. Close it in Excel and try again." });
     }
     setImporting(false);
   };
@@ -100,7 +106,7 @@ export default function StoreImportModal({
         ["Province", changed.province],
         ["Region", changed.region],
         ["Marked Closed", changed.closed ?? 0],
-        ["Reopened (Active)", changed.reopened ?? 0],
+        ["Reopened", changed.reopened ?? 0],
       ] as const).filter(([, n]) => n > 0)
     : [];
 
@@ -120,7 +126,7 @@ export default function StoreImportModal({
           <div>
             <h3 className="font-semibold text-gray-900">Import Stores</h3>
             <p className="text-sm text-gray-500 mt-1">
-              Send the exported file back after editing it. This reads store details only —
+              Send the exported file back after editing it. This reads store details only:
               GPS coordinates, name, channel, province and region.{" "}
               <span className="font-medium text-gray-700">
                 Reps, visit roles and teams are never touched.
@@ -230,7 +236,7 @@ export default function StoreImportModal({
               <p className="font-medium">
                 {(result.totalChanges ?? 0) > 0
                   ? `${result.totalChanges} change${result.totalChanges === 1 ? "" : "s"} saved across ${result.matched} matched store${result.matched === 1 ? "" : "s"}.`
-                  : `Nothing changed — all ${result.matched} matched stores already held these values.`}
+                  : `Nothing changed. All ${result.matched} matched stores already held these values.`}
               </p>
               <p className="text-xs mt-1 opacity-80">
                 {result.matched} of {result.rowsInFile} rows on sheet &quot;{result.sheetName}&quot;
@@ -246,6 +252,35 @@ export default function StoreImportModal({
                     </li>
                   ))}
                 </ul>
+              )}
+
+              {/* Named, because closing a store takes it out of every call
+                  cycle and a bare count cannot be checked against intent. */}
+              {(result.closedStores?.length ?? 0) > 0 && (
+                <div className="mt-2 pt-2 border-t border-green-200">
+                  <p className="text-xs font-medium">Marked Closed, out of every call cycle:</p>
+                  <ul className="list-disc list-inside space-y-0.5 mt-0.5">
+                    {result.closedStores!.map((n, i) => (
+                      <li key={i} className="text-[11px]">{n}</li>
+                    ))}
+                  </ul>
+                  {(changed?.closed ?? 0) > result.closedStores!.length && (
+                    <p className="text-[11px] opacity-80">+{(changed?.closed ?? 0) - result.closedStores!.length} more</p>
+                  )}
+                </div>
+              )}
+              {(result.reopenedStores?.length ?? 0) > 0 && (
+                <div className="mt-2 pt-2 border-t border-green-200">
+                  <p className="text-xs font-medium">Reopened, back in the call cycles:</p>
+                  <ul className="list-disc list-inside space-y-0.5 mt-0.5">
+                    {result.reopenedStores!.map((n, i) => (
+                      <li key={i} className="text-[11px]">{n}</li>
+                    ))}
+                  </ul>
+                  {(changed?.reopened ?? 0) > result.reopenedStores!.length && (
+                    <p className="text-[11px] opacity-80">+{(changed?.reopened ?? 0) - result.reopenedStores!.length} more</p>
+                  )}
+                </div>
               )}
 
               {/* A column that is not in the file is left alone on every store.
@@ -269,6 +304,7 @@ export default function StoreImportModal({
               (result.noIdRows ?? 0) > 0 ||
               (result.changed?.gpsCleared ?? 0) > 0 ||
               (result.badStatusCount ?? 0) > 0 ||
+              (result.keptClosedCount ?? 0) > 0 ||
               result.gpsHalfPresent) && (
               <div className="mt-3 p-3 rounded-lg text-sm bg-amber-50 text-amber-800 border border-amber-200 space-y-2">
                 {(result.changed?.gpsCleared ?? 0) > 0 && (
@@ -278,7 +314,7 @@ export default function StoreImportModal({
                       {result.changed!.gpsCleared === 1 ? " had its" : "s had their"} coordinates
                       cleared
                     </span>{" "}
-                    — the GPS cells were blank in the file. If that was not intended, re-export,
+                    because the GPS cells were blank in the file. If that was not intended, re-export,
                     fix, and import again.
                   </p>
                 )}
@@ -294,7 +330,7 @@ export default function StoreImportModal({
                   <div>
                     <p className="text-xs font-medium">
                       {result.unmatchedCount} row
-                      {result.unmatchedCount === 1 ? "" : "s"} skipped — no store with that Place
+                      {result.unmatchedCount === 1 ? "" : "s"} skipped: no store with that Place
                       ID.
                     </p>
                     <p className="text-[11px] mt-0.5 opacity-80">
@@ -334,7 +370,7 @@ export default function StoreImportModal({
                       ))}
                     </div>
                     <p className="text-[11px] mt-1 opacity-80">
-                      This page never creates a channel — a new one is almost always a typo. Create
+                      This page never creates a channel, because a new one is almost always a typo. Create
                       it on the Channels page first, then import again.
                     </p>
                   </div>
@@ -360,15 +396,38 @@ export default function StoreImportModal({
                   <p className="text-xs">
                     {result.duplicateIdCount} Place ID
                     {result.duplicateIdCount === 1 ? " appears" : "s appear"} more than once in the
-                    file — the last row won: {result.duplicateIds!.join(", ")}
+                    file, and the last row won: {result.duplicateIds!.join(", ")}
                   </p>
+                )}
+
+                {(result.keptClosedCount ?? 0) > 0 && (
+                  <div>
+                    <p className="text-xs font-medium">
+                      {result.keptClosedCount} closed store{result.keptClosedCount === 1 ? " is" : "s are"} marked
+                      Active in this file and {result.keptClosedCount === 1 ? "was" : "were"} left closed:
+                    </p>
+                    <p className="text-[11px] mt-0.5 opacity-80">
+                      An older export says Active for every store that was open then. To reopen a
+                      store, type Reopen in its STATUS cell and import again.
+                    </p>
+                    <ul className="list-disc list-inside space-y-0.5 mt-0.5">
+                      {result.keptClosed!.map((m, i) => (
+                        <li key={i} className="text-[11px]">
+                          {m}
+                        </li>
+                      ))}
+                    </ul>
+                    {result.keptClosedCount! > result.keptClosed!.length && (
+                      <p className="text-[11px]">+{result.keptClosedCount! - result.keptClosed!.length} more</p>
+                    )}
+                  </div>
                 )}
 
                 {(result.badStatusCount ?? 0) > 0 && (
                   <div>
                     <p className="text-xs font-medium">
                       {result.badStatusCount} STATUS cell{result.badStatusCount === 1 ? " was" : "s were"} not
-                      Active or Closed, so {result.badStatusCount === 1 ? "that store keeps" : "those stores keep"} the
+                      Active, Closed or Reopen, so {result.badStatusCount === 1 ? "that store keeps" : "those stores keep"} the
                       status {result.badStatusCount === 1 ? "it has" : "they have"}:
                     </p>
                     <ul className="list-disc list-inside space-y-0.5 mt-0.5">
@@ -394,13 +453,13 @@ export default function StoreImportModal({
           <div className="mt-5 bg-gray-50 border border-gray-100 rounded-xl p-4">
             <h4 className="text-xs font-semibold text-gray-700 mb-2">What this import reads</h4>
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-gray-500">
-              <span>PLACE ID — matches the store, required</span>
+              <span>PLACE ID: matches the store, required</span>
               <span>PLACE NAME</span>
-              <span>CHANNEL — must already exist</span>
+              <span>CHANNEL: must already exist</span>
               <span>PROVINCE</span>
               <span>REGION</span>
               <span>GPS LATITUDE + GPS LONGITUDE</span>
-              <span>STATUS: Active or Closed (a blank cell changes nothing)</span>
+              <span>STATUS: Closed closes a store; Reopen reopens a closed one. Active never reopens, and a blank cell changes nothing</span>
             </div>
             <p className="text-[11px] text-gray-400 mt-3">
               Every other column in the exported file is ignored, including the rep, visit role and
