@@ -10,7 +10,7 @@ import {
   getVisitsPerWeek,
 } from "./types";
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
-import { parseLatLng } from "./latlng";
+import { parseLatLng, haversineKm } from "./latlng";
 
 const WEEKS: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
 const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -855,24 +855,7 @@ function storeCentroid(stores: Store[]): { lat: number; lng: number } | null {
   };
 }
 
-export function haversineKm(
-  lat1: number,
-  lng1: number,
-  lat2: number,
-  lng2: number
-): number {
-  const R = 6371;
-  const dLat = toRad(lat2 - lat1);
-  const dLng = toRad(lng2 - lng1);
-  const a =
-    Math.sin(dLat / 2) ** 2 +
-    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
-  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-}
-
-function toRad(deg: number): number {
-  return (deg * Math.PI) / 180;
-}
+export { haversineKm };
 
 function parseTime(hhmm: string): number {
   const [h, m] = hhmm.split(":").map(Number);

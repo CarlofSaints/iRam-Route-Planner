@@ -31,7 +31,15 @@ interface Props {
    * Stop 0. `derived` means no home address was captured and this is the
    * centroid of the rep's stores — it must not be presented as their home.
    */
-  repHome?: { lat: number; lng: number; derived?: boolean; address?: string; repName?: string } | null;
+  repHome?: {
+    lat: number;
+    lng: number;
+    derived?: boolean;
+    address?: string;
+    repName?: string;
+    /** Set when the rep HAS a home but the saved route still starts this far from it. */
+    homeNotInRouteKm?: number;
+  } | null;
   showRoute?: boolean;
   singleDay?: boolean; // true when exactly one day plan is on the map
 }
@@ -268,7 +276,18 @@ export default function MapView({
                     : "0 · Start & End of Day"}
                 </p>
                 {repHome.repName && <p className="text-gray-500">0 · Start &amp; End of Day</p>}
-                {repHome.derived ? (
+                {repHome.homeNotInRouteKm ? (
+                  <>
+                    <p className="text-amber-700 font-medium">
+                      Their home is {repHome.homeNotInRouteKm.toFixed(1)} km away, and this route does not use it
+                    </p>
+                    <p className="text-gray-500">
+                      The home address was captured after these routes were
+                      generated, so the day still starts at the centre of their
+                      stores. Regenerate routes to start from home.
+                    </p>
+                  </>
+                ) : repHome.derived ? (
                   <>
                     <p className="text-amber-700 font-medium">Not a real home address</p>
                     <p className="text-gray-500">
