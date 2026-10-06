@@ -4,6 +4,7 @@ import { requireSession, encodeSession, SESSION_COOKIE, SESSION_COOKIE_OPTIONS }
 import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { SessionPayload } from "@/lib/types";
 import { findTeamForManager, normaliseEmail } from "@/lib/manager";
+import { isTeamRole } from "@/lib/roles";
 
 export async function POST(request: NextRequest) {
   try {
@@ -65,7 +66,7 @@ export async function POST(request: NextRequest) {
       const reps = await getReps();
       const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(updatedSession.email));
       if (rep) updatedSession.repCode = rep.code;
-    } else if (updatedSession.role === "teamManager") {
+    } else if (isTeamRole(updatedSession.role)) {
       const team = findTeamForManager(await getTeams(), updatedSession.email);
       if (team) updatedSession.teamId = team.id;
     }

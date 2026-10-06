@@ -11,7 +11,8 @@
 
 import { canChangeRoutes, scopeRouteDoc, visibleRepCodes } from "../lib/routeAccess";
 import { guessCycleDay } from "../lib/cycleWeek";
-import type { RoutePlanDocument } from "../lib/types";
+import { canEdit, editRefusal, isTeamRole, type EditArea } from "../lib/roles";
+import { ROLE_DEFINITIONS, ALL_PERMISSIONS, type RoutePlanDocument } from "../lib/types";
 
 let passed = 0;
 let failed = 0;
@@ -69,6 +70,41 @@ ok("scoping narrows the plans", planCodes(scopeRouteDoc(doc, new Set(["A1", "B1"
 ok("scoping to nobody leaves no plans", planCodes(scopeRouteDoc(doc, new Set())) === "");
 ok("scoping never mutates the saved document", doc.repPlans.length === 5);
 ok("no document stays no document", scopeRouteDoc(null, new Set(["A1"])) === null);
+
+// ── Team Admin reads like a team manager ──
+ok("team admin reads their own team only", codes(visibleRepCodes({ role: "teamAdmin", teamId: "t1" }, reps)) === "A1,A2");
+ok("team admin with no team reads nobody", codes(visibleRepCodes({ role: "teamAdmin" }, reps)) === "");
+ok("team admin may NOT generate or delete routes", !canChangeRoutes({ role: "teamAdmin" }));
+ok("isTeamRole: manager", isTeamRole("teamManager"));
+ok("isTeamRole: team admin", isTeamRole("teamAdmin"));
+ok("isTeamRole: not admin", !isTeamRole("admin"));
+ok("isTeamRole: not rep", !isTeamRole("rep"));
+ok("isTeamRole: not viewer", !isTeamRole("viewer"));
+
+// ── Who may change what (Carl, 28 Sep) ──
+const AREAS: EditArea[] = ["stores", "storeOverrides", "callCycleTypes", "settings", "channels", "teams", "storeUpload", "storeDuplicates"];
+const MANAGER_MAY = new Set<EditArea>(["stores", "storeOverrides", "callCycleTypes", "settings"]);
+for (const a of AREAS) {
+  ok(`superAdmin may change ${a}`, canEdit("superAdmin", a));
+  ok(`admin may change ${a}`, canEdit("admin", a));
+  ok(`team admin may change ${a}`, canEdit("teamAdmin", a));
+  ok(`team manager ${MANAGER_MAY.has(a) ? "may" : "may NOT"} change ${a}`, canEdit("teamManager", a) === MANAGER_MAY.has(a));
+  ok(`rep may NOT change ${a}`, !canEdit("rep", a));
+  ok(`viewer may NOT change ${a}`, !canEdit("viewer", a));
+  ok(`an unknown role may NOT change ${a}`, !canEdit("auditor", a));
+  ok(`no role may NOT change ${a}`, !canEdit(undefined, a));
+}
+ok("the refusal names the area", editRefusal("channels").includes("channels"));
+ok("the refusal has no em dash", !editRefusal("teams").includes("—"));
+
+// ── The new role reaches a deployment that already saved its roles ──
+// getRolePermissions() only backfills roles MISSING from the saved blob. A
+// brand-new role is missing by definition, so it must be in the defaults.
+const teamAdminDef = ROLE_DEFINITIONS.find((r) => r.role === "teamAdmin");
+ok("Team Admin is in the role defaults, so the backfill adds it", !!teamAdminDef);
+ok("every Team Admin permission is a real key", !!teamAdminDef?.permissions.every((k) => ALL_PERMISSIONS.some((p) => p.key === k)));
+ok("Team Admin cannot generate routes through the grid either", !teamAdminDef?.permissions.includes("generate_routes"));
+ok("Team Admin cannot manage users", !teamAdminDef?.permissions.includes("manage_users"));
 
 // ── Week guess ── (month is 0-based in new Date)
 const g = (y: number, m: number, d: number) => guessCycleDay(new Date(y, m - 1, d));

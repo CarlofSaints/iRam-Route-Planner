@@ -7,6 +7,7 @@ import { logActivity } from "@/lib/activityLog";
 import { SessionPayload } from "@/lib/types";
 import { passwordProblem } from "@/lib/passwordRules";
 import bcrypt from "bcryptjs";
+import { isTeamRole } from "@/lib/roles";
 
 export async function GET() {
   try {
@@ -109,7 +110,7 @@ export async function PUT(request: NextRequest) {
       const reps = await getReps();
       const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(updatedSession.email));
       if (rep) updatedSession.repCode = rep.code;
-    } else if (updatedSession.role === "teamManager") {
+    } else if (isTeamRole(updatedSession.role)) {
       const team = findTeamForManager(await getTeams(), updatedSession.email);
       if (team) updatedSession.teamId = team.id;
     }

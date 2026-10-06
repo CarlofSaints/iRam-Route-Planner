@@ -15,6 +15,7 @@ import {
   VisitRole,
   getVisitRoleName,
 } from "@/lib/types";
+import { isTeamRole } from "@/lib/roles";
 
 interface RouteTypeInfo {
   id: string;
@@ -55,7 +56,7 @@ export default function RoutesPage() {
   const [selectedTypeId, setSelectedTypeId] = useState("");
 
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
-  const isTeamManager = session?.role === "teamManager";
+  const isTeamManager = isTeamRole(session?.role);
   const isRep = session?.role === "rep";
   // Driven by the permission grid, not a hardcoded role list, so it can be
   // granted without making someone an admin.

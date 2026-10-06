@@ -10,6 +10,7 @@ import {
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { StoreOverride, FrequencyType, SessionPayload } from "@/lib/types";
+import { refuseEdit } from "@/lib/editGuard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -44,6 +45,9 @@ export async function GET() {
 
 // POST — create/update an override for a store (applies immediately to the store)
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("storeOverrides");
+  if (denied) return denied;
+
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: noStore });
@@ -155,6 +159,9 @@ export async function POST(request: NextRequest) {
 
 // PATCH — approve a pending override (managers only). Does not change store values.
 export async function PATCH(request: NextRequest) {
+  const denied = await refuseEdit("storeOverrides");
+  if (denied) return denied;
+
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: noStore });
@@ -189,6 +196,9 @@ export async function PATCH(request: NextRequest) {
 
 // DELETE — remove an override and reset the store to its channel default
 export async function DELETE(request: NextRequest) {
+  const denied = await refuseEdit("storeOverrides");
+  if (denied) return denied;
+
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401, headers: noStore });

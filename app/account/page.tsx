@@ -275,6 +275,7 @@ export default function AccountPage() {
     const map: Record<string, string> = {
       superAdmin: "Super Admin",
       admin: "Admin",
+      teamAdmin: "Team Admin",
       teamManager: "Team Manager",
       rep: "Rep",
       viewer: "Viewer",

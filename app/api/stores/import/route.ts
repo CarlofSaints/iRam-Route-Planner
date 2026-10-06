@@ -5,6 +5,7 @@ import { Channel, Store } from "@/lib/types";
 import { requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
+import { refuseEdit } from "@/lib/editGuard";
 
 /**
  * Stores-only import — the return leg of the Stores page's Excel export.
@@ -26,6 +27,9 @@ import * as XLSX from "xlsx";
 const IMPORTABLE = ["PLACE NAME", "CHANNEL", "PROVINCE", "REGION", "GPS LATITUDE", "GPS LONGITUDE"];
 
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("storeUpload");
+  if (denied) return denied;
+
   try {
     const session = await requirePermission("upload_stores");
 
