@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, saveReps, getUsers } from "@/lib/data";
+import { getReps, saveReps } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { geocodeAddress, isConfidentGeocode, hasGoogleMapsKey } from "@/lib/google-maps";
-import { Rep, SessionPayload } from "@/lib/types";
+import { Rep } from "@/lib/types";
+import { resolveOwnRep } from "@/lib/ownRep";
 
 /**
  * A rep maintaining their OWN rep record — in practice, the home address the
@@ -20,31 +21,6 @@ import { Rep, SessionPayload } from "@/lib/types";
  * no amount of geocoding will place them. A rep standing in their own kitchen
  * tapping "use my current location" is the only source that actually knows.
  */
-
-/**
- * Which Rep record belongs to this login.
- *
- * By id when the account was created from a rep (which is what the Create
- * Account button does), falling back to the email match the session already
- * uses. The fallback is what keeps any account made before `repId` existed —
- * or made by hand in User Admin — working.
- */
-async function resolveOwnRep(session: SessionPayload): Promise<Rep | null> {
-  const reps = await getReps();
-  const users = await getUsers();
-  const user = users.find((u) => u.id === session.userId);
-
-  if (user?.repId) {
-    const byId = reps.find((r) => r.id === user.repId);
-    if (byId) return byId;
-  }
-  if (session.repCode) {
-    const byCode = reps.find((r) => r.code === session.repCode);
-    if (byCode) return byCode;
-  }
-  const email = (session.email || "").toLowerCase().trim();
-  return reps.find((r) => (r.email || "").toLowerCase().trim() === email) ?? null;
-}
 
 /** Never hand back the whole rep record — only what the profile page edits. */
 function publicView(rep: Rep) {
