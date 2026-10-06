@@ -26,8 +26,12 @@ export async function GET() {
     //
     // 🔴 Seeding the form from the login alone showed a blank box to a rep whose
     // number we already had, and saving that blank would have wiped the real one.
+    //
+    // The rep record wins when there is one. The login keeps the copy taken at
+    // account creation, which goes stale the moment an admin edits the number on
+    // the Reps page, and a rep saving only their name would write it back.
     const rep = await resolveOwnRep(session);
-    const cell = safe.cell || rep?.cell || "";
+    const cell = rep ? rep.cell || safe.cell || "" : safe.cell || "";
 
     return NextResponse.json({ user: { ...safe, cell }, manager });
   } catch (err) {
