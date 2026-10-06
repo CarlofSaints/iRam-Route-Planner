@@ -79,6 +79,7 @@ export default function CapacityPage() {
   const [outliers, setOutliers] = useState<OutlierResponse | null>(null);
   const [radiusInput, setRadiusInput] = useState("150");
   const [savingRadius, setSavingRadius] = useState(false);
+  const [radiusError, setRadiusError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState<string | null>(null);
   const [teamSel, setTeamSel] = useState<TeamSelection>(EMPTY_SELECTION);
   const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
@@ -116,17 +117,35 @@ export default function CapacityPage() {
     });
   }, []);
 
+  // 🔴 A refused or failed save used to be swallowed, and the reload then put
+  // the old number back in the box: it looked like the click did nothing. The
+  // radius decides which stores every rep's routing holds out, so the server
+  // only takes it from an admin, and a refusal is now said out loud.
   const applyRadius = async () => {
     const km = Number(radiusInput);
-    if (isNaN(km) || km <= 0) return;
+    if (isNaN(km) || km <= 0) {
+      setRadiusError("Enter a range in km, bigger than 0.");
+      return;
+    }
     setSavingRadius(true);
-    await fetch("/api/settings", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ outlierRadiusKm: km }),
-    }).catch(() => {});
-    await loadOutliers();
-    setSavingRadius(false);
+    setRadiusError(null);
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ outlierRadiusKm: km }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setRadiusError(`Not saved: ${data.error || `the server said ${res.status}`}`);
+        return;
+      }
+      await loadOutliers();
+    } catch {
+      setRadiusError("Not saved: could not reach the server. Check the connection and try again.");
+    } finally {
+      setSavingRadius(false);
+    }
   };
 
   const confirmInCycle = async (storeIds: string[]) => {
@@ -261,21 +280,21 @@ export default function CapacityPage() {
     if (roll.over > 0 && roll.spare > 0)
       return {
         tone: "amber",
-        text: `${roll.over} rep${roll.over > 1 ? "s are" : " is"} over capacity while ${roll.spare} ${roll.spare > 1 ? "have" : "has"} spare capacity — reshuffle store allocations before hiring.`,
+        text: `${roll.over} rep${roll.over > 1 ? "s are" : " is"} over capacity while ${roll.spare} ${roll.spare > 1 ? "have" : "has"} spare capacity. Reshuffle store allocations before hiring.`,
       };
     if (roll.over > 0 && roll.spare === 0)
       return {
         tone: "red",
-        text: `${roll.over} rep${roll.over > 1 ? "s are" : " is"} over capacity and no one has meaningful spare — consider employing more reps to cover the load.`,
+        text: `${roll.over} rep${roll.over > 1 ? "s are" : " is"} over capacity and no one has meaningful spare. Consider employing more reps to cover the load.`,
       };
     if (roll.spare >= Math.max(2, Math.ceil(roll.routed * 0.3)))
       return {
         tone: "blue",
-        text: `${roll.spare} reps are running well under capacity (${Math.round(roll.totalSpareHours)}h spare/month total) — there may be room to widen territories or reduce headcount.`,
+        text: `${roll.spare} reps are running well under capacity (${Math.round(roll.totalSpareHours)}h spare/month total). There may be room to widen territories or reduce headcount.`,
       };
     return {
       tone: "green",
-      text: `Team is well balanced — average utilisation ${Math.round(roll.avgUtil * 100)}%.`,
+      text: `Team is well balanced: average utilisation ${Math.round(roll.avgUtil * 100)}%.`,
     };
   }, [roll]);
 
@@ -301,7 +320,7 @@ export default function CapacityPage() {
                 <span className="ml-2">· {data.workingDaysPerMonth} working days/month</span>
               </>
             ) : (
-              "No routes generated yet — figures show allocation only"
+              "No routes generated yet. Figures show allocation only."
             )}
           </p>
         </div>
@@ -576,27 +595,40 @@ export default function CapacityPage() {
           <div>
             <h2 className="font-semibold text-gray-900">Out-of-range stores</h2>
             <p className="text-xs text-gray-500">
-              Stores more than the range below from their rep&apos;s working area. These are <span className="font-medium">held out of routing</span> until confirmed as genuinely part of the rep&apos;s cycle — confirm, then regenerate routes to schedule them.
+              Stores more than the range below from their rep&apos;s working area. These are <span className="font-medium">held out of routing</span> until confirmed as genuinely part of the rep&apos;s cycle. Confirm, then regenerate routes to schedule them.
             </p>
           </div>
-          <div className="flex items-center gap-2 flex-shrink-0">
-            <label className="text-xs text-gray-500">Range bracket</label>
-            <input
-              type="number"
-              min={1}
-              value={radiusInput}
-              onChange={(e) => setRadiusInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") applyRadius(); }}
-              className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-iram-green"
-            />
-            <span className="text-xs text-gray-500">km</span>
-            <button
-              onClick={applyRadius}
-              disabled={savingRadius}
-              className="px-3 py-1.5 bg-iram-green text-white text-xs font-medium rounded-lg hover:bg-iram-green-dark disabled:opacity-50"
-            >
-              {savingRadius ? "Applying..." : "Apply"}
-            </button>
+          <div className="flex items-center gap-2 flex-shrink-0 flex-wrap justify-end">
+            {/* Admin only, like the server: the radius decides which stores
+                every rep's routing holds out. Everyone else sees the number. */}
+            {isAdmin ? (
+              <>
+                <label className="text-xs text-gray-500">Range bracket</label>
+                <input
+                  type="number"
+                  min={1}
+                  value={radiusInput}
+                  onChange={(e) => setRadiusInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") applyRadius(); }}
+                  className="w-20 border border-gray-200 rounded-lg px-2 py-1.5 text-sm text-right focus:outline-none focus:ring-1 focus:ring-iram-green"
+                />
+                <span className="text-xs text-gray-500">km</span>
+                <button
+                  onClick={applyRadius}
+                  disabled={savingRadius}
+                  className="px-3 py-1.5 bg-iram-green text-white text-xs font-medium rounded-lg hover:bg-iram-green-dark disabled:opacity-50"
+                >
+                  {savingRadius ? "Applying..." : "Apply"}
+                </button>
+              </>
+            ) : (
+              <span className="text-xs text-gray-500" title="Only an admin can change the range">
+                Range bracket: {outliers?.radiusKm ?? radiusInput} km
+              </span>
+            )}
+            {radiusError && (
+              <span className="basis-full text-right text-xs text-red-700">{radiusError}</span>
+            )}
             {groupedOutliers.length > 0 && (
               <a
                 href={`/api/reps/outliers/export`}
@@ -673,7 +705,7 @@ export default function CapacityPage() {
                       onClick={() => confirmInCycle(g.storeIds)}
                       disabled={confirming === g.storeIds[0]}
                       className="px-3 py-1 bg-green-600 text-white text-xs font-medium rounded-lg hover:bg-green-700 disabled:opacity-50"
-                      title="Confirm this store really is in the rep's cycle — it will be routed on the next generation"
+                      title="Confirm this store really is in the rep's cycle. It will be routed on the next generation."
                     >
                       {confirming === g.storeIds[0] ? "Confirming..." : "Confirm in cycle"}
                     </button>
