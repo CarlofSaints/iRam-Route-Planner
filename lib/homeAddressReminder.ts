@@ -66,6 +66,8 @@ export interface OutstandingRep {
    * why they are or are not being mailed, from the one field.
    */
   blockedReason?: ReminderBlockReason;
+  /** Set by the sender when the mail to this rep was refused, so no table says "Emailed". */
+  sendFailed?: boolean;
 }
 
 export interface BlockedRep extends OutstandingRep {
@@ -520,6 +522,7 @@ export function buildRepReminderEmail(input: RepReminderInput): { subject: strin
 
 /** What a row says about a rep who is not being written to this week. */
 function rowStatus(r: OutstandingRep): string {
+  if (r.sendFailed) return "Send failed";
   if (!r.blockedReason) return "Emailed";
   if (r.blockedReason === "no_login") return "Needs a login first";
   if (r.blockedReason === "no_email") return "No email address";

@@ -373,6 +373,12 @@ const team = (over: Partial<Team> = {}): Team => ({
   ok("every row says whether that rep was actually emailed", mgr.html.includes("Emailed"));
   ok("and the plain text carries the same status", /Emailed/.test(mgr.text));
   ok("it does not leak reps from other teams", !mgr.html.includes("No Email"));
+
+  // A rep whose mail was refused must not be reported to their manager as emailed.
+  plan.managerDigests[0].reps[0].sendFailed = true;
+  const after = buildManagerDigestEmail({ managerName: "Manager One", teamName: "REGION A", reps: plan.managerDigests[0].reps });
+  ok("a refused send reads Send failed in the manager's mail", after.html.includes("Send failed") && after.text.includes("Send failed"));
+  ok("and the rep whose mail went still reads Emailed", after.html.includes("Emailed"));
   ok("no em dashes in the manager's mail", !/—|&mdash;/.test(mgr.html + mgr.text + mgr.subject));
   ok("the manager's mail is branded iRam", !/clippa/i.test(mgr.html + mgr.text));
 

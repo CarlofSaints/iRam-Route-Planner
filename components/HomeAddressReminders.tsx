@@ -223,7 +223,7 @@ export default function HomeAddressReminders() {
             title="Email the run summary of who would be written to. No rep or manager is contacted."
             className="px-3 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
           >
-            {busy === "preview" ? "Building..." : "Email me the list"}
+            {busy === "preview" ? "Building..." : "Email the list to the summary recipients"}
           </button>
           <button
             onClick={() => setExpanded((v) => !v)}

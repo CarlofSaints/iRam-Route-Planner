@@ -32,11 +32,10 @@ export async function PUT(request: NextRequest) {
 
     // The Monday home-address reminder. Only a real boolean moves it: a stray
     // "false" string from a form would otherwise silently switch off a job whose
-    // only failure symptom is mail that stops arriving. It needs manage_reps,
-    // the same permission that can see the panel, because this route otherwise
-    // only asks "are you signed in".
+    // only failure symptom is mail that stops arriving. Admins only: the switch
+    // stops the mail for every team, not just the caller's.
     if (typeof body.homeAddressRemindersEnabled === "boolean") {
-      if (!session || !(await sessionHasPermission(session, "manage_reps"))) {
+      if (!session || (session.role !== "admin" && session.role !== "superAdmin")) {
         return NextResponse.json({ error: "Forbidden" }, { status: 403 });
       }
       const previous = next.homeAddressRemindersEnabled !== false;

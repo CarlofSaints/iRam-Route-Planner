@@ -62,6 +62,18 @@ const SEND_INTERVAL_MS = 550;
 /** Reminder counts are saved every this many reps, so a timeout loses at most this many. */
 const SAVE_EVERY = 20;
 
+/**
+ * No rep is written to twice inside this window, whoever presses what. Vercel
+ * can deliver a cron event more than once, and a "Send reminders now" on a
+ * Friday must not be followed by the Monday run three days later.
+ */
+const MIN_GAP_MS = 6 * 24 * 60 * 60 * 1000;
+
+/** Sending is an admin act: it mails every team, not only the caller's. */
+function canSend(role: string): boolean {
+  return role === "admin" || role === "superAdmin";
+}
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 function isCronCaller(request: NextRequest): boolean {
@@ -129,7 +141,8 @@ async function runReminders(options: RunOptions) {
 
   // The switch is off. Still logged, still counted: a job that goes quiet
   // without saying so is indistinguishable from one that broke.
-  if (!remindersEnabled(settings) && options.trigger === "cron") {
+  // A person can preview while the switch is off, but not send round it.
+  if (!remindersEnabled(settings) && (options.trigger === "cron" || !options.dryRun)) {
     const run = await finish({
       trigger: options.trigger,
       dryRun: options.dryRun,
@@ -152,9 +165,39 @@ async function runReminders(options: RunOptions) {
   const nextState: ReminderStateMap = { ...state };
   const now = new Date().toISOString();
 
+  // One real send per week. A second delivery of the same cron event, or a run
+  // overlapping a manual send, finds the first one's record and stops.
+  if (!options.dryRun) {
+    const cutoff = Date.now() - MIN_GAP_MS;
+    const recent = (await getReminderRuns()).find(
+      (r) => !r.dryRun && !r.skippedReason && (r.sent > 0 || r.managersEmailed > 0) && Date.parse(r.startedAt) > cutoff
+    );
+    if (recent) {
+      const run = await finish({
+        trigger: options.trigger,
+        dryRun: false,
+        outstanding: plan.outstanding.length,
+        mailable: plan.mailable.length,
+        sent: 0,
+        failed: 0,
+        blocked: plan.blocked.length,
+        managersEmailed: 0,
+        summarySent: false,
+        settled: plan.settled.length,
+        skippedReason: `Reminders already went out on ${recent.startedAt.slice(0, 10)}. Nobody is written to twice in a week.`,
+      });
+      return { run, plan, failed: [] };
+    }
+  }
+
   if (!options.dryRun) {
     let sinceSave = 0;
     for (const rep of plan.mailable) {
+      // Belt and braces for a run that died part-way and was started again: its
+      // run record says nothing was sent, but the per-rep state saved every 20
+      // does. Anyone mailed inside the window is left alone.
+      const already = nextState[rep.repId];
+      if (already?.lastResult === "sent" && Date.parse(already.lastSentAt) > Date.now() - MIN_GAP_MS) continue;
       const { subject, html, text } = buildRepReminderEmail({
         name: rep.name,
         timesReminded: rep.timesReminded,
@@ -164,6 +207,7 @@ async function runReminders(options: RunOptions) {
       const result = await sendPaced({ to: rep.email, subject, html, text });
 
       const prior = nextState[rep.repId];
+      if (!result.sent) rep.sendFailed = true;
       if (result.sent) {
         sent++;
         nextState[rep.repId] = {
@@ -314,6 +358,7 @@ export async function GET(request: NextRequest) {
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (session.role === "rep") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     if (!(await sessionHasPermission(session, "manage_reps"))) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
@@ -337,12 +382,16 @@ export async function POST(request: NextRequest) {
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (session.role === "rep") return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     if (!(await sessionHasPermission(session, "manage_reps"))) {
       return NextResponse.json({ error: "Forbidden" }, { status: 403 });
     }
 
     const body = await request.json().catch(() => ({}));
     const dryRun = body?.dryRun === true;
+    if (!dryRun && !canSend(session.role)) {
+      return NextResponse.json({ error: "Only an admin can send the reminders, because they go to every team." }, { status: 403 });
+    }
 
     const { run, plan, failed } = await runReminders({
       trigger: "manual",
