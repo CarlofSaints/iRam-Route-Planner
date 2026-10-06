@@ -4,7 +4,8 @@ import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
 import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
 import { hasGoogleMapsKey } from "@/lib/google-maps";
-import { getSession, sessionHasPermission } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
+import { canChangeRoutes } from "@/lib/routeAccess";
 import { logActivity } from "@/lib/activityLog";
 
 export const maxDuration = 120;
@@ -15,8 +16,12 @@ export async function POST(request: NextRequest) {
     // thing stopping a viewer from regenerating everyone's routes.
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (!(await sessionHasPermission(session, "generate_routes"))) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    // Admins only, in code rather than the Roles grid: the grid only backfills
+    // MISSING roles, so a permission ticked there once can never be taken back
+    // by changing the defaults. Generating rewrites every rep's week and spends
+    // the Google Directions budget.
+    if (!canChangeRoutes(session)) {
+      return NextResponse.json({ error: "Only an admin can generate routes." }, { status: 403 });
     }
 
     const body = await request.json().catch(() => ({}));
