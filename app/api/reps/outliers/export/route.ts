@@ -27,12 +27,6 @@ export async function GET(request: NextRequest) {
     const channelName = new Map(channels.map((c) => [c.id, c.name]));
     const storeById = new Map(stores.map((s) => [s.id, s]));
 
-    const outsideSA = (latS: string, lngS: string) => {
-      const lat = parseFloat(latS), lng = parseFloat(lngS);
-      if (isNaN(lat) || isNaN(lng)) return "";
-      return lat < -35 || lat > -22 || lng < 16 || lng > 33 ? "Yes" : "";
-    };
-
     // Reverse-geocode each outlier's real location so the client can fix the source.
     const toGeocode: { lat: number; lng: number }[] = [];
     for (const o of result.stores) {
@@ -61,7 +55,8 @@ export async function GET(request: NextRequest) {
         channelName.get(o.channelId) || o.channelId || "",
         (st?.province || "").trim(),
         geocodedFor(st?.gpsLat ?? "", st?.gpsLng ?? ""),
-        outsideSA(st?.gpsLat ?? "", st?.gpsLng ?? ""),
+        // Same rule the route engine uses (lib/saCoordinates).
+        o.foreignCoordinate ? "Yes, fix the GPS" : "",
         o.distanceKm,
         st?.gpsLat ?? "",
         st?.gpsLng ?? "",

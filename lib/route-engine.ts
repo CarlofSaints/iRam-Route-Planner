@@ -12,6 +12,14 @@ import {
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
 import { parseLatLng, haversineKm, DEFAULT_SPEED_KMH, driveMinutes } from "./latlng";
 import { parseClock, formatClock } from "./clock";
+import { isForeignCoordinate } from "./saCoordinates";
+
+/**
+ * Why a store with a coordinate outside South Africa was not routed. Says "GPS"
+ * on purpose: the Routes page offers its coordinate-fix boxes on any reason
+ * that does, and that is the fix this store needs.
+ */
+export const FOREIGN_GPS_REASON = "GPS is outside South Africa, fix the coordinates";
 
 const WEEKS: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
 const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
@@ -79,8 +87,16 @@ export async function generateRepRoute(
   // distances and poison both the centroid anchor and every travel estimate.
   const withGps: Store[] = [];
   const noGps: Store[] = [];
+  // A real number pair that is not in South Africa (a store name geocoded
+  // without a country, or latitude and longitude swapped) is BROKEN, not far
+  // away. Held out before the out-of-range check, so it can never be offered
+  // as "confirm to include", is never routed even if someone confirmed it,
+  // and cannot drag the rep's median centre or centroid anchor off the map.
+  const foreignGps: Store[] = [];
   for (const s of stores) {
-    (parseLatLng(s.gpsLat, s.gpsLng) ? withGps : noGps).push(s);
+    if (!parseLatLng(s.gpsLat, s.gpsLng)) noGps.push(s);
+    else if (isForeignCoordinate(s.gpsLat, s.gpsLng)) foreignGps.push(s);
+    else withGps.push(s);
   }
 
   // Hold out stores that are far outside the rep's working area (likely an
@@ -226,10 +242,16 @@ export async function generateRepRoute(
     reason: "Missing or invalid GPS coordinates",
   }));
 
+  const foreignUnassigned = foreignGps.map((s) => ({
+    storeId: s.id,
+    storeName: s.name,
+    reason: FOREIGN_GPS_REASON,
+  }));
+
   const outOfRangeUnassigned = outOfRange.map(({ store, distanceKm }) => ({
     storeId: store.id,
     storeName: store.name,
-    reason: `Out of range (${distanceKm} km from rep's area) — confirm to include`,
+    reason: `Out of range (${distanceKm} km from rep's area), confirm to include`,
   }));
 
   return {
@@ -244,7 +266,7 @@ export async function generateRepRoute(
     days: dayPlans,
     stats: {
       totalStores: stores.length,
-      unassignedStores: [...noGpsUnassigned, ...outOfRangeUnassigned, ...stillUnassigned],
+      unassignedStores: [...noGpsUnassigned, ...foreignUnassigned, ...outOfRangeUnassigned, ...stillUnassigned],
     },
   };
 }

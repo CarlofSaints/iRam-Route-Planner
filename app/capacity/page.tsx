@@ -562,8 +562,23 @@ export default function CapacityPage() {
                       <span className="text-gray-400 font-mono text-xs">{g.gpsLat}, {g.gpsLng}</span>
                     )}
                   </td>
-                  <td className="px-4 py-3 text-right font-semibold text-orange-700">{g.distanceKm.toLocaleString()} km</td>
+                  <td className="px-4 py-3 text-right font-semibold text-orange-700">
+                    {/* A distance to a coordinate in another country measures
+                        the error, not the store, so it is not quoted. */}
+                    {g.outsideSA ? <span className="text-red-700">Not in SA</span> : `${g.distanceKm.toLocaleString()} km`}
+                  </td>
                   <td className="px-4 py-3 text-right">
+                    {g.outsideSA ? (
+                      // Broken, not distant: the route engine never routes a
+                      // coordinate outside South Africa, so confirming it would
+                      // change nothing. The fix is the coordinate itself.
+                      <span
+                        className="text-xs text-red-700"
+                        title="This coordinate is not in South Africa, so it is never routed. Correct the store's GPS (on the Stores page, or in the Routes page unassigned list) and regenerate."
+                      >
+                        Fix the GPS, not routable
+                      </span>
+                    ) : (
                     <button
                       onClick={() => confirmInCycle(g.storeIds)}
                       disabled={confirming === g.storeIds[0]}
@@ -572,6 +587,7 @@ export default function CapacityPage() {
                     >
                       {confirming === g.storeIds[0] ? "Confirming..." : "Confirm in cycle"}
                     </button>
+                    )}
                   </td>
                 </tr>
               ))}

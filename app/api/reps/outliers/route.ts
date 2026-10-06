@@ -23,22 +23,18 @@ export async function GET(request: NextRequest) {
     const channelName = new Map(channels.map((c) => [c.id, c.name]));
     const storeById = new Map(stores.map((s) => [s.id, s]));
 
-    // South Africa bounding box — coords outside it are clearly wrong.
-    const outsideSA = (lat: number, lng: number) =>
-      lat < -35 || lat > -22 || lng < 16 || lng > 33;
-
     const enriched = result.stores.map((s) => {
       const st = storeById.get(s.storeId);
-      const lat = parseFloat(st?.gpsLat ?? "");
-      const lng = parseFloat(st?.gpsLng ?? "");
-      const valid = !isNaN(lat) && !isNaN(lng);
       return {
         ...s,
         channel: channelName.get(s.channelId) || s.channelId || "",
         province: (st?.province || "").trim(),
         gpsLat: st?.gpsLat ?? "",
         gpsLng: st?.gpsLng ?? "",
-        outsideSA: valid ? outsideSA(lat, lng) : false,
+        // One definition of "outside South Africa" (lib/saCoordinates), the
+        // same one the route engine refuses to route, rather than a second
+        // bounding box here that could disagree with it.
+        outsideSA: s.foreignCoordinate,
       };
     });
 

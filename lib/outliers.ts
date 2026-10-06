@@ -1,6 +1,7 @@
 import { Rep, Store, Channel, VisitRole, DEFAULT_VISIT_ROLES } from "./types";
 import { parseLatLng, haversineKm, medianCenter } from "./route-engine";
 import { getStoresForRep, getRoleForRep } from "./repStores";
+import { isForeignCoordinate } from "./saCoordinates";
 
 export interface OutlierStore {
   repCode: string;
@@ -9,6 +10,14 @@ export interface OutlierStore {
   storeName: string;
   channelId: string;
   distanceKm: number;
+  /**
+   * The coordinate is a real number pair but not in South Africa (a name
+   * geocoded without a country, or lat/lng swapped). Broken, not distant:
+   * the route engine never routes it, so it must not be offered "Confirm in
+   * cycle". Listed even when already confirmed, because confirming did not
+   * and cannot make it routable.
+   */
+  foreignCoordinate: boolean;
 }
 
 export interface OutlierResult {
@@ -42,15 +51,18 @@ export function computeOutliers(
     if (!role.checkOutliers) continue;
 
     const repStores = getStoresForRep(rep, stores, role, null, channels);
-    const center = medianCenter(repStores);
-    if (!center) continue;
+    // The rep's area is measured from their South African stores only, the
+    // same as the route engine, so a store in Montana cannot drag it.
+    const center = medianCenter(repStores.filter((s) => !isForeignCoordinate(s.gpsLat, s.gpsLng)));
 
     for (const s of repStores) {
-      if (s.rangeConfirmed) continue;
       const p = parseLatLng(s.gpsLat, s.gpsLng);
       if (!p) continue; // invalid GPS is a separate exception
-      const d = haversineKm(center.lat, center.lng, p.lat, p.lng);
-      if (d > radiusKm) {
+      const foreign = isForeignCoordinate(s.gpsLat, s.gpsLng);
+      if (!foreign && s.rangeConfirmed) continue;
+      if (!foreign && !center) continue;
+      const d = center ? haversineKm(center.lat, center.lng, p.lat, p.lng) : 0;
+      if (foreign || d > radiusKm) {
         out.push({
           repCode: rep.code,
           repName: rep.name,
@@ -58,6 +70,7 @@ export function computeOutliers(
           storeName: s.name,
           channelId: s.channelId,
           distanceKm: Math.round(d),
+          foreignCoordinate: foreign,
         });
         perRep[rep.code] = (perRep[rep.code] || 0) + 1;
       }
