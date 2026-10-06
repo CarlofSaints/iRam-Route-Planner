@@ -9,8 +9,14 @@ import {
   FrequencyType,
   getFrequencyLabel,
   DEFAULT_VISIT_ROLES,
+  CHANNEL_SOURCE_LABEL,
+  Store,
+  StoreOverride,
 } from "@/lib/types";
 import { resolveRoleDefault, roleCallsOnChannel, withRoleEnabled } from "@/lib/repStores";
+import { isRepChannel, storeCountsByChannel } from "@/lib/routable";
+import { useColumnWidths } from "@/components/useColumnWidths";
+import { useTableSort, useSortedRows, SortableTh } from "@/components/TableSort";
 
 /**
  * Column widths are user-draggable, so they cannot live in Tailwind classes:
@@ -23,6 +29,9 @@ const COL_DEFAULTS: Record<string, number> = {
   select: 56,
   num: 56,
   name: 240,
+  stores: 90,
+  calledOn: 110,
+  source: 170,
   actions: 150,
 };
 const ROLE_FREQ_DEFAULT = 190;
@@ -60,48 +69,40 @@ export default function ChannelsPage() {
     byChannel: { name: string; count: number; to: string }[];
   } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
-  const [colWidths, setColWidths] = useState<Record<string, number>>({});
   // "<channelId>:<roleId>" of a switch mid-save, so only that one greys out.
   const [togglingKey, setTogglingKey] = useState<string | null>(null);
+  // Stores and overrides, only to count what a channel switch would affect.
+  const [stores, setStores] = useState<Store[]>([]);
+  const [overrides, setOverrides] = useState<StoreOverride[]>([]);
 
-  // Restore saved widths once on mount. Kept in localStorage rather than on the
-  // channel record because this is a per-person view preference, not data.
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(WIDTH_STORAGE_KEY);
-      if (raw) setColWidths(JSON.parse(raw));
-    } catch {
-      // A corrupt entry just means default widths; never worth failing the page.
+  /**
+   * Default width of every leaf column, including one set per visit role.
+   * The drag mechanics live in components/useColumnWidths.ts, lifted out of
+   * this page so the Stores grid uses exactly the same code.
+   */
+  const widthDefaults = useMemo(() => {
+    const d: Record<string, number> = { ...COL_DEFAULTS };
+    for (const role of visitRoles) {
+      d[callsKey(role.id)] = ROLE_CALLS_DEFAULT;
+      d[freqKey(role.id)] = ROLE_FREQ_DEFAULT;
+      d[durKey(role.id)] = ROLE_DUR_DEFAULT;
     }
-  }, []);
-
-  const persistWidths = (next: Record<string, number>) => {
-    try {
-      localStorage.setItem(WIDTH_STORAGE_KEY, JSON.stringify(next));
-    } catch {
-      // Private mode / quota — the resize still works for this session.
-    }
-  };
+    return d;
+  }, [visitRoles]);
+  const colw = useColumnWidths(WIDTH_STORAGE_KEY, widthDefaults, COL_MIN);
 
   /** Every leaf column, left to right, with its current width. */
   const columns = useMemo(() => {
-    const cols: { key: string; width: number }[] = [
-      { key: "select", width: colWidths.select ?? COL_DEFAULTS.select },
-      { key: "num", width: colWidths.num ?? COL_DEFAULTS.num },
-      { key: "name", width: colWidths.name ?? COL_DEFAULTS.name },
-    ];
+    const keys: string[] = ["select", "num", "name", "stores", "calledOn"];
     for (const role of visitRoles) {
-      // The primary role gets no switch — see roleCallsOnChannel — so it gets
-      // no column either rather than a permanently-on control taking up width.
-      if (!role.isPrimary) {
-        cols.push({ key: callsKey(role.id), width: colWidths[callsKey(role.id)] ?? ROLE_CALLS_DEFAULT });
-      }
-      cols.push({ key: freqKey(role.id), width: colWidths[freqKey(role.id)] ?? ROLE_FREQ_DEFAULT });
-      cols.push({ key: durKey(role.id), width: colWidths[durKey(role.id)] ?? ROLE_DUR_DEFAULT });
+      // The primary role gets no per-role switch (see roleCallsOnChannel), so it
+      // gets no column either rather than a permanently-on control.
+      if (!role.isPrimary) keys.push(callsKey(role.id));
+      keys.push(freqKey(role.id), durKey(role.id));
     }
-    cols.push({ key: "actions", width: colWidths.actions ?? COL_DEFAULTS.actions });
-    return cols;
-  }, [visitRoles, colWidths]);
+    keys.push("source", "actions");
+    return keys.map((key) => ({ key, width: colw.widthOf(key) }));
+  }, [visitRoles, colw]);
 
   const widthOf = (key: string) => columns.find((c) => c.key === key)?.width ?? COL_MIN;
 
@@ -110,53 +111,7 @@ export default function ChannelsPage() {
   const leftNum = widthOf("select");
   const leftName = widthOf("select") + widthOf("num");
 
-  /** Drag a column edge. */
-  const startResize = (key: string, e: React.PointerEvent<HTMLSpanElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    const startX = e.clientX;
-    const startWidth = widthOf(key);
-    let latest = startWidth;
-
-    // The listeners go on WINDOW, not on the grip.
-    //
-    // Every pointermove re-renders this table, and re-rendering replaces the
-    // grip's DOM node. Anything bound to that node — listeners, pointer
-    // capture — dies with it on the very first move, and the drag with it.
-    const onMove = (ev: PointerEvent) => {
-      latest = Math.max(COL_MIN, Math.round(startWidth + (ev.clientX - startX)));
-      setColWidths((prev) => ({ ...prev, [key]: latest }));
-    };
-    const onUp = () => {
-      window.removeEventListener("pointermove", onMove);
-      window.removeEventListener("pointerup", onUp);
-      document.body.style.userSelect = "";
-      setColWidths((prev) => {
-        const next = { ...prev, [key]: latest };
-        persistWidths(next);
-        return next;
-      });
-    };
-    // Dragging across a table otherwise selects every cell it crosses.
-    document.body.style.userSelect = "none";
-    window.addEventListener("pointermove", onMove);
-    window.addEventListener("pointerup", onUp);
-  };
-
-  /** Double-click a grip to put that column back to its default. */
-  const resetColumn = (key: string) => {
-    setColWidths((prev) => {
-      const next = { ...prev };
-      delete next[key];
-      persistWidths(next);
-      return next;
-    });
-  };
-
-  const resetAllColumns = () => {
-    setColWidths({});
-    persistWidths({});
-  };
+  const resetAllColumns = colw.resetAll;
 
   /**
    * The drag grip. Sits on the row-2 header cell but spans both header rows so
@@ -172,9 +127,10 @@ export default function ChannelsPage() {
    */
   const renderGrip = (colKey: string) => (
     <span
-      onPointerDown={(e) => startResize(colKey, e)}
-      onDoubleClick={() => resetColumn(colKey)}
-      title="Drag to resize — double-click to reset"
+      onPointerDown={(e) => colw.startResize(colKey, e)}
+      onDoubleClick={() => colw.resetColumn(colKey)}
+      onClick={(e) => e.stopPropagation()}
+      title="Drag to resize. Double-click to reset."
       className="absolute -top-11 bottom-0 right-0 w-2 cursor-col-resize z-50 hover:bg-iram-green/30"
     >
       <span className="absolute right-0 top-0 bottom-0 w-px bg-gray-300" />
@@ -253,14 +209,67 @@ export default function ChannelsPage() {
       );
       setImportMsg({
         type: "error",
-        text: `Could not save ${role.name} on ${ch.name} — the switch has been put back.`,
+        text: `Could not save ${role.name} on ${ch.name}. The switch has been put back.`,
       });
     } finally {
       setTogglingKey(null);
     }
   };
 
+  /**
+   * Switch a channel in or out of every call cycle.
+   *
+   * Confirmed on the way OUT, with the count, because switching off a big
+   * channel removes hundreds of stores from every rep's week. Not on the way
+   * back in: putting stores back is the safe direction.
+   */
+  const setCalledOn = async (ch: Channel, next: boolean) => {
+    if (!next) {
+      const c = storeCounts.get(ch.id);
+      const open = c?.open ?? 0;
+      const excused = c?.excused ?? 0;
+      const kept = excused > 0 ? ` ${excused} with an approved Call Override stay in.` : "";
+      if (
+        !confirm(
+          `Switch off "Called on?" for ${ch.name}?\n\n${open} open store${open === 1 ? "" : "s"} in this channel will leave every call cycle (sales, QC and training) at the next route generation.${kept}`
+        )
+      )
+        return;
+    }
+    const key = `${ch.id}:calledOn`;
+    const before = ch.notARepChannel;
+    setTogglingKey(key);
+    setChannels((prev) => prev.map((c) => (c.id === ch.id ? { ...c, notARepChannel: next ? undefined : true } : c)));
+    try {
+      const res = await fetch("/api/channels", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: ch.id, notARepChannel: !next }),
+      });
+      if (!res.ok) throw new Error(String(res.status));
+      setImportMsg({
+        type: "success",
+        text: next
+          ? `${ch.name} is called on again. Regenerate routes to bring its stores back into the cycles.`
+          : `${ch.name} is no longer called on. Regenerate routes to take its stores out of the cycles.`,
+      });
+    } catch {
+      setChannels((prev) => prev.map((c) => (c.id === ch.id ? { ...c, notARepChannel: before } : c)));
+      setImportMsg({ type: "error", text: `Could not save Called on? for ${ch.name}. The switch has been put back.` });
+    } finally {
+      setTogglingKey(null);
+    }
+  };
+
   const load = () => {
+    // Counts only; the page works without them.
+    Promise.all([
+      fetch("/api/stores").then((r) => r.json()).catch(() => []),
+      fetch("/api/store-overrides").then((r) => r.json()).catch(() => ({ overrides: [] })),
+    ]).then(([st, ov]) => {
+      setStores(Array.isArray(st) ? st : []);
+      setOverrides(Array.isArray(ov?.overrides) ? ov.overrides : []);
+    });
     Promise.all([
       fetch("/api/channels").then((r) => r.json()).catch(() => []),
       fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
@@ -436,8 +445,73 @@ export default function ChannelsPage() {
     load();
   };
 
-  const filtered = channels.filter((ch) =>
-    ch.name.toLowerCase().includes(search.trim().toLowerCase())
+  /** Stores per channel, counted BEFORE anyone flips a switch. */
+  const storeCounts = useMemo(() => storeCountsByChannel(stores, overrides), [stores, overrides]);
+
+  const filtered = useMemo(
+    () => channels.filter((ch) => ch.name.toLowerCase().includes(search.trim().toLowerCase())),
+    [channels, search]
+  );
+
+  // Original order until a heading is clicked.
+  const sort = useTableSort("", "asc", ["stores"]);
+  const sortedChannels = useSortedRows(
+    filtered,
+    {
+      name: (ch) => ch.name,
+      stores: (ch) => storeCounts.get(ch.id)?.total ?? 0,
+      calledOn: (ch) => isRepChannel(ch),
+      source: (ch) => (ch.source ? CHANNEL_SOURCE_LABEL[ch.source] : null),
+    },
+    sort
+  );
+
+  /**
+   * The three channel-wide cells (Stores, Called on?, and Came from). A plain
+   * function, not a nested component, for the same reason as renderGrip.
+   */
+  const renderCountCells = (ch: Channel) => {
+    const c = storeCounts.get(ch.id);
+    const on = isRepChannel(ch);
+    return (
+      <>
+        <td
+          className={`px-3 py-3 text-right border-b border-gray-100 tabular-nums ${on ? "text-gray-700" : "text-gray-400"}`}
+          title={
+            c
+              ? `${c.total} store${c.total === 1 ? "" : "s"}: ${c.open} open${c.excused ? `, ${c.excused} kept in the cycle by a Call Override` : ""}`
+              : "No stores in this channel"
+          }
+        >
+          {(c?.total ?? 0).toLocaleString("en-ZA")}
+        </td>
+        <td className="px-3 py-3 text-center border-b border-gray-100">
+          {renderToggle(
+            on,
+            (next) => setCalledOn(ch, next),
+            on
+              ? `Reps call on ${ch.name}. Switch off if nobody visits this channel.`
+              : `Nobody calls on ${ch.name}. Its stores are out of every call cycle.`,
+            togglingKey === `${ch.id}:calledOn`
+          )}
+          {!on && <div className="text-[10px] text-gray-400 mt-0.5">Not called on</div>}
+        </td>
+      </>
+    );
+  };
+
+  const renderSourceCell = (ch: Channel) => (
+    <td className="px-4 py-3 border-l border-b border-gray-100 text-xs truncate">
+      {ch.source ? (
+        <span className="text-gray-600" title={ch.sourceAt ? new Date(ch.sourceAt).toLocaleString("en-ZA") : undefined}>
+          {CHANNEL_SOURCE_LABEL[ch.source]}
+        </span>
+      ) : (
+        <span className="text-gray-400 italic" title="This channel predates the record of where channels come from">
+          Not recorded
+        </span>
+      )}
+    </td>
   );
 
   const allVisibleSelected =
@@ -630,7 +704,7 @@ export default function ChannelsPage() {
                 {applyPreview.manualEditsProtected > 0 && (
                   <>
                     {applyPreview.manualEditsProtected} store(s) look hand-edited and will be kept
-                    as-is — an override record is created for each so they stay protected.
+                    as-is. An override record is created for each so they stay protected.
                   </>
                 )}
               </p>
@@ -733,7 +807,7 @@ export default function ChannelsPage() {
           )}
         </div>
 
-        {Object.keys(colWidths).length > 0 && (
+        {colw.customised && (
           <button
             onClick={resetAllColumns}
             title="Put every column back to its default width"
@@ -799,12 +873,32 @@ export default function ChannelsPage() {
                 >
                   #
                 </th>
-                <th
+                <SortableTh
+                  sortId="name"
+                  sort={sort}
                   style={{ left: leftName }}
                   className="sticky top-0 z-40 h-11 bg-gray-50 px-6 py-3 border-b border-r border-gray-200 truncate"
                 >
                   Channel Name
-                </th>
+                </SortableTh>
+                <SortableTh
+                  sortId="stores"
+                  sort={sort}
+                  align="right"
+                  title="Stores filed under this channel, counted before any switch is flipped"
+                  className="sticky top-0 z-30 h-11 bg-gray-50 px-3 py-3 border-b border-gray-200"
+                >
+                  Stores
+                </SortableTh>
+                <SortableTh
+                  sortId="calledOn"
+                  sort={sort}
+                  align="center"
+                  title="Does anybody call on this channel? Off takes its stores out of every call cycle, for every visit role. A store with an approved Call Override is still visited."
+                  className="sticky top-0 z-30 h-11 bg-gray-50 px-3 py-3 border-b border-gray-200"
+                >
+                  Called on?
+                </SortableTh>
                 {visitRoles.map((role) => (
                   <th
                     key={role.id}
@@ -812,7 +906,7 @@ export default function ChannelsPage() {
                     className="sticky top-0 z-30 h-11 bg-gray-50 px-6 py-3 text-center border-l border-b border-gray-200"
                     title={
                       role.isPrimary
-                        ? "The sales rep's call cycle. These values are copied onto every store in the channel. It has no switch — a sales rep is allocated store by store, not channel by channel."
+                        ? "The sales rep's call cycle. These values are copied onto every store in the channel. It has no per-role switch: a sales rep is allocated store by store. Use Called on? to take the whole channel out."
                         : `How ${role.name} calls on this channel. Switch it off if ${role.name} never visits this channel. Blank values = this role's own default of ${getFrequencyLabel(role.frequency)} / ${role.duration} min.`
                     }
                   >
@@ -820,6 +914,14 @@ export default function ChannelsPage() {
                     {role.isPrimary && <span className="ml-1 text-gray-400 normal-case">(primary)</span>}
                   </th>
                 ))}
+                <SortableTh
+                  sortId="source"
+                  sort={sort}
+                  title="Where this channel came from. Not recorded means it predates this column."
+                  className="sticky top-0 z-30 h-11 bg-gray-50 px-4 py-3 border-l border-b border-gray-200"
+                >
+                  Came from
+                </SortableTh>
                 <th className="sticky top-0 z-30 h-11 bg-gray-50 px-6 py-3 text-right border-b border-gray-200">Actions</th>
               </tr>
               <tr className="bg-gray-50 text-left text-[10px] text-gray-400 uppercase tracking-wider">
@@ -840,6 +942,12 @@ export default function ChannelsPage() {
                   className="sticky top-11 z-40 bg-gray-50 px-6 pb-2 border-b border-r border-gray-200 relative"
                 >
                   {renderGrip("name")}
+                </th>
+                <th className="sticky top-11 z-30 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative">
+                  {renderGrip("stores")}
+                </th>
+                <th className="sticky top-11 z-30 bg-gray-50 px-3 pb-2 border-b border-gray-200 relative">
+                  {renderGrip("calledOn")}
                 </th>
                 {visitRoles.map((role) => (
                   <Fragment key={role.id}>
@@ -863,13 +971,16 @@ export default function ChannelsPage() {
                     </th>
                   </Fragment>
                 ))}
+                <th className="sticky top-11 z-30 bg-gray-50 px-4 pb-2 border-l border-b border-gray-200 relative">
+                  {renderGrip("source")}
+                </th>
                 <th className="sticky top-11 z-30 bg-gray-50 px-6 pb-2 border-b border-gray-200 relative">
                   {renderGrip("actions")}
                 </th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((ch, i) => (
+              {sortedChannels.map((ch, i) => (
                 <tr
                   key={ch.id}
                   className={`group hover:bg-gray-50 ${selected.has(ch.id) ? "bg-red-50/40" : ""}`}
@@ -911,6 +1022,7 @@ export default function ChannelsPage() {
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-full focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
                       </td>
+                      {renderCountCells(ch)}
                       {visitRoles.map((role) => {
                         const eff = effectiveFor(editData as Channel, role);
                         const entry = editData.roleDefaults?.[role.id];
@@ -926,7 +1038,7 @@ export default function ChannelsPage() {
                                   calls,
                                   (next) => setRoleEnabled(ch, role, next),
                                   calls
-                                    ? `${role.name} calls on ${ch.name} — switch off if they never visit this channel`
+                                    ? `${role.name} calls on ${ch.name}. Switch off if they never visit this channel`
                                     : `${role.name} does not call on ${ch.name}`,
                                   false
                                 )}
@@ -965,7 +1077,7 @@ export default function ChannelsPage() {
                                   {!role.isPrimary && isSet && (
                                     <button
                                       onClick={() => clearRole(role)}
-                                      title={`Clear — fall back to the ${role.name} role's own default`}
+                                      title={`Clear, and use the ${role.name} role's own default`}
                                       className="text-gray-300 hover:text-red-500 text-xs px-1"
                                     >
                                       ×
@@ -973,12 +1085,13 @@ export default function ChannelsPage() {
                                   )}
                                 </div>
                               ) : (
-                                <div className="text-right text-xs text-gray-300">—</div>
+                                <div className="text-right text-xs text-gray-300">-</div>
                               )}
                             </td>
                           </Fragment>
                         );
                       })}
+                      {renderSourceCell(ch)}
                       <td className="px-6 py-3 text-right space-x-2 border-b border-gray-100">
                         <button
                           onClick={() => saveEdit(ch.id)}
@@ -1006,6 +1119,7 @@ export default function ChannelsPage() {
                       >
                         <span className="block truncate">{ch.name}</span>
                       </td>
+                      {renderCountCells(ch)}
                       {visitRoles.map((role) => {
                         const eff = effectiveFor(ch, role);
                         const entry = ch.roleDefaults?.[role.id];
@@ -1013,7 +1127,7 @@ export default function ChannelsPage() {
                         const isSet = role.isPrimary || (!!entry && entry.enabled !== false);
                         const why = isSet
                           ? ""
-                          : `Not set for this channel — falls back to the ${role.name} role's own default`;
+                          : `Not set for this channel, so it uses the ${role.name} role's own default`;
                         return (
                           <Fragment key={role.id}>
                             {!role.isPrimary && (
@@ -1022,7 +1136,7 @@ export default function ChannelsPage() {
                                   calls,
                                   (next) => setRoleEnabled(ch, role, next),
                                   calls
-                                    ? `${role.name} calls on ${ch.name} — switch off if they never visit this channel`
+                                    ? `${role.name} calls on ${ch.name}. Switch off if they never visit this channel`
                                     : `${role.name} does not call on ${ch.name}`,
                                   togglingKey === `${ch.id}:${role.id}`
                                 )}
@@ -1030,7 +1144,7 @@ export default function ChannelsPage() {
                             )}
                             <td
                               className={`px-6 py-3 border-b border-gray-200 ${role.isPrimary ? "border-l" : ""}`}
-                              title={calls ? why : `${role.name} does not call on this channel — no visits are planned and no time is charged to their capacity`}
+                              title={calls ? why : `${role.name} does not call on this channel. No visits are planned and no time is charged to their capacity`}
                             >
                               <span
                                 className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${
@@ -1050,11 +1164,12 @@ export default function ChannelsPage() {
                               }`}
                               title={calls ? why : ""}
                             >
-                              {calls ? `${eff.duration} min` : "—"}
+                              {calls ? `${eff.duration} min` : "-"}
                             </td>
                           </Fragment>
                         );
                       })}
+                      {renderSourceCell(ch)}
                       <td className="px-6 py-3 text-right space-x-3 border-b border-gray-100">
                         <button
                           onClick={() => startEdit(ch)}

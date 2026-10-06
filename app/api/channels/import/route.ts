@@ -169,6 +169,23 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
+      // Reps Call Here: Yes / No / blank (leave alone). Not part of the store
+      // cascade: taking a channel out of the cycle rewrites no store.
+      const calledOnRaw = col(row, "Reps Call Here", "Called On", "Called On?");
+      const calledOn = parseYesNo(calledOnRaw);
+      if (calledOn === null) {
+        errors.push(`Row ${i + 2}: "Reps Call Here" must be Yes or No, not "${calledOnRaw}"`);
+        continue;
+      }
+      const applyCalledOn = (ch: Channel): boolean => {
+        if (calledOn === undefined) return false;
+        const excluded = ch.notARepChannel === true;
+        if (excluded === !calledOn) return false;
+        if (calledOn) delete ch.notARepChannel;
+        else ch.notARepChannel = true;
+        return true;
+      };
+
       const existing = byName.get(name.toLowerCase().trim());
       if (existing) {
         // Update existing channel
@@ -184,8 +201,9 @@ export async function POST(request: NextRequest) {
         // Only the primary values cascade onto stores, so the role columns are
         // read separately and counted as an update without triggering it.
         const roleChanged = applyRoleColumns(existing, row, i + 2);
+        const calledOnChanged = applyCalledOn(existing);
         if (changed) touchedChannelIds.add(existing.id);
-        if (changed || roleChanged) updated++;
+        if (changed || roleChanged || calledOnChanged) updated++;
       } else {
         // Create new channel
         const newCh: Channel = {
@@ -193,8 +211,11 @@ export async function POST(request: NextRequest) {
           name,
           frequency: frequency || "monthly",
           duration: duration ?? 30,
+          source: "excel",
+          sourceAt: new Date().toISOString(),
         };
         applyRoleColumns(newCh, row, i + 2);
+        applyCalledOn(newCh);
         channels.push(newCh);
         byName.set(name.toLowerCase().trim(), newCh);
         touchedChannelIds.add(newCh.id);

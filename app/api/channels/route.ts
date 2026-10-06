@@ -17,7 +17,7 @@ export async function GET() {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, name, frequency, duration, roleDefaults } = body as Partial<Channel> & { id: string };
+    const { id, name, frequency, duration, roleDefaults, notARepChannel } = body as Partial<Channel> & { id: string };
 
     const channels = await getChannels();
     const idx = channels.findIndex((c) => c.id === id);
@@ -36,6 +36,20 @@ export async function PUT(request: NextRequest) {
     // builds a non-primary rep's store list, so a change takes effect on the
     // next route generation with no cascade needed.
     if (roleDefaults !== undefined) channels[idx].roleDefaults = roleDefaults;
+
+    // Whether anybody calls on this channel at all (lib/routable.ts).
+    //
+    // Deliberately NOT part of defaultsChanged: that cascades frequency and
+    // duration onto every store in the channel, and taking a channel out of the
+    // cycle is no reason to rewrite the rhythm of stores an override may put
+    // straight back in. Absent means "reps call here", so the flag is REMOVED
+    // rather than stored as false.
+    const routingChanged =
+      notARepChannel !== undefined && !!notARepChannel !== (channels[idx].notARepChannel === true);
+    if (notARepChannel !== undefined) {
+      if (notARepChannel) channels[idx].notARepChannel = true;
+      else delete channels[idx].notARepChannel;
+    }
 
     await saveChannels(channels);
 
@@ -60,7 +74,13 @@ export async function PUT(request: NextRequest) {
       action: "Updated channel",
       actor: session?.email || "unknown",
       actorName: session?.name || "Unknown",
-      summary: `Updated channel ${channels[idx].name}`,
+      summary: routingChanged
+        ? `${channels[idx].name}: ${
+            channels[idx].notARepChannel
+              ? "Called on? switched off. Its stores leave every call cycle at the next route generation"
+              : "Called on? switched back on. Its stores return to the call cycles at the next route generation"
+          }`
+        : `Updated channel ${channels[idx].name}`,
       details: defaultsChanged
         ? `Applied defaults to ${storesUpdated} store(s); ${storesPinned} kept their override`
         : undefined,
@@ -81,6 +101,8 @@ export async function POST(request: NextRequest) {
       name: body.name,
       frequency: body.frequency || "monthly",
       duration: body.duration || 30,
+      source: "manual",
+      sourceAt: new Date().toISOString(),
     };
     channels.push(newChannel);
     await saveChannels(channels);
