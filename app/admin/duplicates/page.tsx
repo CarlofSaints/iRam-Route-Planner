@@ -8,6 +8,7 @@ interface DupRecord {
   channel: string;
   gpsLat: string;
   gpsLng: string;
+  closed?: boolean;
   keep: boolean;
 }
 interface DupGroup {
@@ -152,7 +153,12 @@ export default function DuplicatesPage() {
                     <tr key={r.id} className={r.keep ? "bg-green-50/40" : ""}>
                       <td className="px-3 py-2 font-medium text-gray-900">{idx === 0 ? g.storeName : ""}</td>
                       <td className="px-3 py-2 text-gray-500">{idx === 0 ? g.repCode : ""}</td>
-                      <td className="px-3 py-2 font-mono text-xs text-gray-600">{r.placeId}</td>
+                      <td className="px-3 py-2 font-mono text-xs text-gray-600">
+                        {r.placeId}
+                        {r.closed && (
+                          <span className="ml-2 font-sans text-[10px] font-medium px-1.5 py-0.5 rounded bg-gray-100 text-gray-500">Closed</span>
+                        )}
+                      </td>
                       <td className="px-3 py-2 text-gray-600">{r.channel}</td>
                       <td className="px-3 py-2 font-mono text-xs text-gray-500">{r.gpsLat}, {r.gpsLng}</td>
                       <td className="px-3 py-2 text-center">

@@ -12,7 +12,7 @@
 import { canChangeRoutes, refusedRouteSettings, scopeRouteDoc, visibleRepCodes } from "../lib/routeAccess";
 import { mergeBaseForPartialRun, PARTIAL_RUN_REFUSAL } from "../lib/partialRun";
 import { guessCycleDay } from "../lib/cycleWeek";
-import { canEdit, editRefusal, isTeamRole, type EditArea } from "../lib/roles";
+import { canEdit, editRefusal, isTeamRole, storeInTeam, storeRepCodes, type EditArea } from "../lib/roles";
 import { ROLE_DEFINITIONS, ALL_PERMISSIONS, type RoutePlanDocument } from "../lib/types";
 
 let passed = 0;
@@ -161,6 +161,29 @@ is("Saturday looks ahead to Monday", g(2026, 10, 3), "Wk1", "Monday");
 is("Sunday looks ahead to Monday", g(2026, 10, 11), "Wk2", "Monday");
 is("Sunday crossing a year", g(2026, 12, 27), "Wk4", "Monday");
 is("New Year week starts on the Monday of 28 Dec", g(2027, 1, 1), "Wk4", "Friday");
+
+// ── A team role may edit a store only when its team calls on it ──
+{
+  const mine = new Set(["A1", "A2"]);
+  const s = (o: Record<string, unknown>) => ({ repCode: "", ...o }) as Parameters<typeof storeInTeam>[0];
+  ok("a store whose primary rep is in the team is theirs", storeInTeam(s({ repCode: "A1" }), mine));
+  ok("a store only their QC rep calls on is theirs", storeInTeam(s({ repCode: "B1", roleReps: { qc: "A2" } }), mine));
+  ok("an unmigrated store in a legacy slot is theirs", storeInTeam(s({ repCode: "B1", repCode3: "A1" }), mine));
+  ok("another team's store is not", !storeInTeam(s({ repCode: "B1", roleReps: { qc: "B2" } }), mine));
+  ok("an unallocated store is not", !storeInTeam(s({ repCode: "" }), mine));
+  ok("fails closed: a manager whose team did not resolve owns nothing", !storeInTeam(s({ repCode: "" }), new Set()));
+  ok("whitespace in a code does not hide the match", storeInTeam(s({ repCode: " A1 " }), mine));
+  const all = storeRepCodes(s({ repCode: "A1", roleReps: { qc: "B1", tr: "" }, repCode2: "C1" })).join(",");
+  ok("every slot is read", all === "A1,B1,C1", all);
+
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  const route = fs.readFileSync(path.join(__dirname, "..", "app", "api", "stores", "route.ts"), "utf8");
+  const put = route.slice(route.indexOf("export async function PUT"));
+  ok("PUT /api/stores scopes team roles", /isTeamRole\(caller\.role\)/.test(put));
+  ok("PUT /api/stores refuses another team's store before writing",
+    /storeInTeam\(stores\[idx\], teamRepCodes\)/.test(put) && put.indexOf("storeInTeam(") < put.indexOf("saveStores("));
+}
 
 console.log(`${passed} passed, ${failed} failed`);
 if (failed) process.exit(1);

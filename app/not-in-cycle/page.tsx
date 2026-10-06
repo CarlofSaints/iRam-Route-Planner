@@ -12,7 +12,7 @@
  * ones. The filter says so, and switching it is one click.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { useTableSort, useSortedRows, SortableTh } from "@/components/TableSort";
 import { TeamFilter } from "@/components/TeamFilter";
@@ -21,6 +21,7 @@ import { EMPTY_SELECTION, filterRepsByTeam, type TeamSelection } from "@/lib/tea
 import {
   filterNotInCycle,
   findNotInCycle,
+  reasonCountsFor,
   isCorrectlyOut,
   REASONS,
   type NotInCycleReason,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/notInCycle";
 import { isClosed, closedReasonLabel } from "@/lib/closedStores";
 import { parseLatLng } from "@/lib/latlng";
+import { isTeamRole } from "@/lib/roles";
 import {
   getVisitRoleName,
   type CallCycleType,
@@ -46,7 +48,9 @@ const SELECT =
 export default function NotInCyclePage() {
   const { session, can } = useSession();
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
-  const isTeamManager = session?.role === "teamManager";
+  // A Team Admin is scoped exactly like a team manager (lib/roles.ts). Testing
+  // the one spelling let a Team Admin see every team's stores.
+  const isTeamManager = isTeamRole(session?.role);
   const canFixGps = can("manage_stores");
 
   const [stores, setStores] = useState<Store[]>([]);
@@ -74,6 +78,8 @@ export default function NotInCyclePage() {
   const [saving, setSaving] = useState<string | null>(null);
   const [saved, setSaved] = useState<Set<string>>(new Set());
   const [saveError, setSaveError] = useState("");
+  // Synchronous twin of `saving`, so two clicks inside one render cannot both start.
+  const savingRef = useRef(false);
 
   // ?rep=CODE lands on one rep's list. Read once from the URL rather than via
   // useSearchParams, which would force a Suspense boundary on the whole page.
@@ -116,16 +122,23 @@ export default function NotInCyclePage() {
    * routes are regenerated, and quietly dropping it from the list would claim a
    * fix that has not happened yet. It says "saved, regenerate" instead.
    */
-  const saveGps = async (storeId: string) => {
-    const edit = edits[storeId];
-    if (!edit) return;
+  const saveGps = async (storeId: string, lat: number, lng: number) => {
+    // One save at a time: the server rewrites the whole store list on each,
+    // so two in flight could each write back a list without the other's pin.
+    if (savingRef.current) return;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+    // The VALIDATED numbers, not the box text: "- 26.1" passes the check once
+    // cleaned, but saved raw it parses to NaN everywhere else.
+    const gpsLat = String(lat);
+    const gpsLng = String(lng);
+    savingRef.current = true;
     setSaving(storeId);
     setSaveError("");
     try {
       const res = await fetch("/api/stores", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ id: storeId, gpsLat: edit.lat, gpsLng: edit.lng }),
+        body: JSON.stringify({ id: storeId, gpsLat, gpsLng }),
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -133,8 +146,11 @@ export default function NotInCyclePage() {
         return;
       }
       setSaved((p) => new Set(p).add(storeId));
-      setStores((prev) => prev.map((s) => (s.id === storeId ? { ...s, gpsLat: edit.lat, gpsLng: edit.lng } : s)));
+      setStores((prev) => prev.map((s) => (s.id === storeId ? { ...s, gpsLat, gpsLng } : s)));
+    } catch {
+      setSaveError("Could not save the coordinates: the server could not be reached.");
     } finally {
+      savingRef.current = false;
       setSaving(null);
     }
   };
@@ -212,6 +228,12 @@ export default function NotInCyclePage() {
         }
       ),
     [result, reps, repCode, teams, teamSel, channelId, status, reason, search, repByCode, teamById, channelById, visitRoles]
+  );
+
+  // The Reason dropdown counts what each choice would show under the other filters.
+  const reasonCounts = useMemo(
+    () => reasonCountsFor(result, reps, { repCode, teams, teamSel, channelId, status, search }),
+    [result, reps, repCode, teams, teamSel, channelId, status, search]
   );
 
   const sort = useTableSort("why", "asc");
@@ -377,7 +399,7 @@ export default function NotInCyclePage() {
             .sort((a, b) => REASONS[a].rank - REASONS[b].rank)
             .map((r) => (
               <option key={r} value={r}>
-                {REASONS[r].label} ({result.counts[r]})
+                {REASONS[r].label} ({reasonCounts[r]})
               </option>
             ))}
         </select>
@@ -454,24 +476,27 @@ export default function NotInCyclePage() {
                             list somebody can clear in ten seconds, and sending
                             them to another page to do it is how stores stay
                             unrouted. */}
-                        {r.why === "bad_gps" && canFixGps ? (
-                          saved.has(r.store.id) ? (
-                            <div className="text-xs text-green-700">
-                              Saved. Regenerate routes to bring it into the cycle, and correct it in Perigee too.
-                            </div>
-                          ) : (
-                            <div className="mt-1">
-                              <CoordinateEntry
-                                lat={edits[r.store.id]?.lat ?? ""}
-                                lng={edits[r.store.id]?.lng ?? ""}
-                                onChange={(lat, lng) => setEdits((p) => ({ ...p, [r.store.id]: { lat, lng } }))}
-                                onSave={() => saveGps(r.store.id)}
-                                saving={saving === r.store.id}
-                                storeName={r.store.name}
-                                nearby={placedByRep.get(r.store.repCode) ?? []}
-                              />
-                            </div>
-                          )
+                        {/* The Saved note is keyed on the save, not the reason:
+                            a saved pin changes the store's reason straight
+                            away, and the note must not vanish with it. */}
+                        {saved.has(r.store.id) ? (
+                          <div className="text-xs text-green-700">
+                            GPS saved. Regenerate routes to bring it into the cycle, and correct it in Perigee too.
+                          </div>
+                        ) : r.why === "bad_gps" && canFixGps ? (
+                          <div className="mt-1">
+                            <CoordinateEntry
+                              lat={edits[r.store.id]?.lat ?? ""}
+                              lng={edits[r.store.id]?.lng ?? ""}
+                              onChange={(lat, lng) => setEdits((p) => ({ ...p, [r.store.id]: { lat, lng } }))}
+                              onSave={(lat, lng) => saveGps(r.store.id, lat, lng)}
+                              saving={saving === r.store.id}
+                              // Every row waits while any row is saving.
+                              locked={saving !== null}
+                              storeName={r.store.name}
+                              nearby={placedByRep.get(r.store.repCode) ?? []}
+                            />
+                          </div>
                         ) : (
                           REASONS[r.why].action && <div className="text-xs text-gray-400">{REASONS[r.why].action}</div>
                         )}

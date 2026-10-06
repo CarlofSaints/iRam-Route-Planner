@@ -19,6 +19,11 @@ import {
   countExclusions,
   exclusionReason,
   storeCountsByChannel,
+  switchOffImpact,
+  switchOffSentence,
+  channelsStillHoldingStores,
+  describeCalledOnChanges,
+  describeCalledOnChange,
 } from "../lib/routable";
 import type { Channel, Rep, Store, StoreOverride } from "../lib/types";
 import { DEFAULT_VISIT_ROLES } from "../lib/types";
@@ -205,6 +210,84 @@ const CHANNELS = [channel("indep"), channel("makro", { notARepChannel: true })];
   // An approved override puts the store back for every role, not only sales.
   const excused = routableStores({ stores, channels: CHANNELS, overrides: [override("m1", "approved")] });
   eq("an approved override brings it back for QC too", getStoresForRep(qcRep, excused, qc, null, CHANNELS).map((s) => s.id).sort(), ["i1", "m1"]);
+}
+
+// ── Switching a channel off: what the confirm says ──────────────────────────
+{
+  const stores = [
+    store("o1", "makro"),
+    store("o2", "makro"),
+    store("o3", "makro"),
+    store("x1", "makro", { closed: true }),
+  ];
+  const counts = storeCountsByChannel(stores, [override("o3", "approved")]);
+  const impact = switchOffImpact(counts.get("makro"));
+  eq("an override-kept store is not counted as leaving", impact, { leaving: 2, kept: 1 });
+  eq("the confirm names both numbers", switchOffSentence(impact), "2 open stores will leave every call cycle, 1 kept in by a Call Override");
+  eq("with no override it names only the leavers", switchOffSentence({ leaving: 1, kept: 0 }), "1 open store will leave every call cycle");
+}
+
+// ── A channel that still holds stores cannot be deleted ────────────────────
+{
+  const stores = [store("a", "makro"), store("b", "makro", { closed: true }), store("c", "spar")];
+  eq("each requested channel with stores is named, with its count (closed ones too)",
+    channelsStillHoldingStores(["makro", "empty"], stores), [{ id: "makro", stores: 2 }]);
+  eq("an empty channel may go", channelsStillHoldingStores(["empty"], stores), []);
+  // Why it matters: a store whose channel is gone counts as called on.
+  ok("(a store pointing at a deleted channel is routable, which is why delete is refused)",
+    routableStores({ stores: [store("z", "gone")], channels: [], overrides: [] }).length === 1);
+
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  const route = fs.readFileSync(path.join(__dirname, "..", "app", "api", "channels", "route.ts"), "utf8");
+  const del = route.slice(route.indexOf("export async function DELETE"));
+  ok("DELETE checks for stores before it saves", /channelsStillHoldingStores\(/.test(del) &&
+    del.indexOf("channelsStillHoldingStores(") < del.indexOf("saveChannels("));
+  ok("DELETE refuses with the server's message", /status: 409/.test(del));
+}
+
+// ── An import that flips "Reps Call Here" says so, with counts ─────────────
+{
+  const stores = [store("m1", "makro"), store("m2", "makro"), store("m3", "makro", { closed: true }), store("s1", "spar")];
+  const changes = describeCalledOnChanges(
+    [channel("makro", { name: "Makro", notARepChannel: true }), channel("spar", { name: "Spar" })],
+    stores,
+    [override("m2", "approved")]
+  );
+  eq("switched off: the open stores leaving, override-kept counted apart", changes[0], {
+    id: "makro", name: "Makro", calledOn: false, openStores: 1, keptByOverride: 1,
+  });
+  eq("switched back on: the open stores returning", changes[1], {
+    id: "spar", name: "Spar", calledOn: true, openStores: 1, keptByOverride: 0,
+  });
+  ok("the line says OFF and the count", /switched OFF\. 1 open store leave/.test(describeCalledOnChange(changes[0])));
+  ok("the line names the override-kept stores", /1 kept in by a Call Override/.test(describeCalledOnChange(changes[0])));
+
+  const fs = require("fs") as typeof import("fs");
+  const path = require("path") as typeof import("path");
+  const imp = fs.readFileSync(path.join(__dirname, "..", "app", "api", "channels", "import", "route.ts"), "utf8");
+  ok("the channel import records every flipped Reps Call Here", /if \(calledOnChanged\) calledOnFlipped\.set/.test(imp));
+  ok("the channel import returns the flips", /calledOnChanges,/.test(imp));
+  const page = fs.readFileSync(path.join(__dirname, "..", "app", "channels", "page.tsx"), "utf8");
+  ok("the Channels page lists the flips from an import", /data\.calledOnChanges/.test(page) && /describeCalledOnChange\)/.test(page));
+  ok("the Called on? confirm uses the two-number sentence", /switchOffSentence\(switchOffImpact\(/.test(page));
+  // The body of one `const name = async (...) => {` handler, up to the next one.
+  const body = (name: string) => {
+    const start = page.indexOf(`const ${name} = async`);
+    if (start === -1) return "";
+    const next = page.slice(start + 1).search(/\n  const \w+ = /);
+    return next === -1 ? page.slice(start) : page.slice(start, start + 1 + next);
+  };
+  const calledOn = body("setCalledOn");
+  ok("switching off refuses before the counts load, ahead of the confirm",
+    /if \(countsState !== "loaded"\) \{/.test(calledOn) && calledOn.indexOf("countsState") < calledOn.indexOf("confirm("));
+  ok("the Called on? switch is locked off until the counts load", /on && countsState !== "loaded"\)/.test(page));
+  ok("the Channels page gates its controls on canEdit(..., \"channels\")", /canEdit\(session\?\.role, "channels"\)/.test(page));
+  for (const fn of ["setRoleEnabled", "setCalledOn", "saveEdit", "addChannel", "deleteChannel", "deleteSelected", "handleImport", "applyDefaults"]) {
+    const b = body(fn);
+    ok(`${fn} waits for any write already in flight`, /beginWrite\(\)/.test(b) && /endWrite\(\)/.test(b));
+  }
+  ok("the in-flight guard actually refuses a second write", /if \(inFlight\.current\) return false;/.test(page));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

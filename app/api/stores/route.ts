@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getStores, saveStores, getChannels, getStoreOverrides, saveStoreOverrides } from "@/lib/data";
+import { getStores, saveStores, getChannels, getStoreOverrides, saveStoreOverrides, getReps } from "@/lib/data";
+import { isTeamRole, storeInTeam } from "@/lib/roles";
+import { withWriteLock } from "@/lib/writeLock";
 import { Store, FrequencyType } from "@/lib/types";
 import { getSession, sessionHasPermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
@@ -32,39 +34,70 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, ...updates } = body as Partial<Store> & { id: string };
 
-    const stores = await getStores();
-    const idx = stores.findIndex((s) => s.id === id);
-    if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
-
-    // Active/Closed, by hand. Goes through the one helper so a reopened store
-    // loses its old reason and date instead of carrying them forever.
-    let statusChanged = false;
-    if (updates.closed !== undefined) {
-      statusChanged = applyStatus(stores[idx], updates.closed === true);
+    // A team manager or team admin may change only their own team's stores:
+    // one a rep in their team calls on, in any role. Without this, closing a
+    // store took any team's shop out of every cycle.
+    let teamRepCodes: Set<string> | null = null;
+    if (isTeamRole(caller.role)) {
+      const reps = await getReps();
+      teamRepCodes = new Set(
+        caller.teamId ? reps.filter((r) => r.teamId === caller.teamId).map((r) => r.code) : []
+      );
     }
 
-    if (updates.repCode !== undefined) stores[idx].repCode = updates.repCode;
-    if (updates.channelId !== undefined) stores[idx].channelId = updates.channelId;
-    if (updates.gpsLat !== undefined) stores[idx].gpsLat = updates.gpsLat;
-    if (updates.gpsLng !== undefined) stores[idx].gpsLng = updates.gpsLng;
-    if (updates.rangeConfirmed !== undefined) stores[idx].rangeConfirmed = updates.rangeConfirmed;
+    // Read, patch the one named store, write: under the lock, so two quick
+    // saves (Save GPS on two rows) cannot each write back a list that is
+    // missing the other's change (lib/writeLock.ts).
+    const outcome = await withWriteLock("stores", async () => {
+      const stores = await getStores();
+      const idx = stores.findIndex((s) => s.id === id);
+      if (idx === -1) return { status: 404, error: "Not found" } as const;
 
-    // Editing call frequency or duration here diverges the store from its
-    // channel, so it has to leave an override record — that record is what
-    // stops a later channel change cascading over the decision, and it is the
-    // same marker the Call Overrides page uses.
-    const divergesFromChannel =
-      (updates.frequency !== undefined && updates.frequency !== stores[idx].frequency) ||
-      (updates.duration !== undefined && updates.duration !== stores[idx].duration);
+      if (teamRepCodes) {
+        if (!storeInTeam(stores[idx], teamRepCodes)) {
+          return { status: 403, error: "That store is not called on by anyone in your team, so your role can't change it." } as const;
+        }
+        const newRep = (updates.repCode ?? "").trim();
+        if (newRep && !teamRepCodes.has(newRep)) {
+          return { status: 403, error: `Rep ${newRep} is not in your team, so your role can't allocate this store to them.` } as const;
+        }
+      }
 
-    if (updates.frequency !== undefined) stores[idx].frequency = updates.frequency as FrequencyType;
-    if (updates.duration !== undefined) stores[idx].duration = updates.duration;
-    if (updates.dayOfWeek !== undefined) stores[idx].dayOfWeek = updates.dayOfWeek;
-    if (updates.weekNumber !== undefined) stores[idx].weekNumber = updates.weekNumber;
-    if (updates.region !== undefined) stores[idx].region = updates.region;
-    if (updates.province !== undefined) stores[idx].province = updates.province;
+      // Active/Closed, by hand. Goes through the one helper so a reopened store
+      // loses its old reason and date instead of carrying them forever.
+      let statusChanged = false;
+      if (updates.closed !== undefined) {
+        statusChanged = applyStatus(stores[idx], updates.closed === true);
+      }
 
-    await saveStores(stores);
+      if (updates.repCode !== undefined) stores[idx].repCode = updates.repCode;
+      if (updates.channelId !== undefined) stores[idx].channelId = updates.channelId;
+      if (updates.gpsLat !== undefined) stores[idx].gpsLat = updates.gpsLat;
+      if (updates.gpsLng !== undefined) stores[idx].gpsLng = updates.gpsLng;
+      if (updates.rangeConfirmed !== undefined) stores[idx].rangeConfirmed = updates.rangeConfirmed;
+
+      // Editing call frequency or duration here diverges the store from its
+      // channel, so it has to leave an override record — that record is what
+      // stops a later channel change cascading over the decision, and it is the
+      // same marker the Call Overrides page uses.
+      const divergesFromChannel =
+        (updates.frequency !== undefined && updates.frequency !== stores[idx].frequency) ||
+        (updates.duration !== undefined && updates.duration !== stores[idx].duration);
+
+      if (updates.frequency !== undefined) stores[idx].frequency = updates.frequency as FrequencyType;
+      if (updates.duration !== undefined) stores[idx].duration = updates.duration;
+      if (updates.dayOfWeek !== undefined) stores[idx].dayOfWeek = updates.dayOfWeek;
+      if (updates.weekNumber !== undefined) stores[idx].weekNumber = updates.weekNumber;
+      if (updates.region !== undefined) stores[idx].region = updates.region;
+      if (updates.province !== undefined) stores[idx].province = updates.province;
+
+      await saveStores(stores);
+      return { stores, idx, statusChanged, divergesFromChannel };
+    });
+    if ("error" in outcome) {
+      return NextResponse.json({ error: outcome.error }, { status: outcome.status });
+    }
+    const { stores, idx, statusChanged, divergesFromChannel } = outcome;
 
     const session = await getSession();
 

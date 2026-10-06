@@ -92,6 +92,9 @@ export function applyStatus(store: Store, closed: boolean, now?: string): boolea
   return true;
 }
 
+/** The only words that reopen a CLOSED store from a spreadsheet. */
+const REOPEN_WORDS = ["reopen", "re-open", "reopened", "re-opened"];
+
 /**
  * Read an Active/Closed cell from a spreadsheet.
  *
@@ -102,6 +105,32 @@ export function parseStatusCell(raw: string): boolean | undefined | null {
   const v = (raw ?? "").trim().toLowerCase();
   if (!v) return undefined;
   if (["closed", "close", "shut", "yes", "y", "true", "1"].includes(v)) return true;
-  if (["active", "open", "no", "n", "false", "0"].includes(v)) return false;
+  if (["active", "open", "no", "n", "false", "0", ...REOPEN_WORDS].includes(v)) return false;
   return null;
+}
+
+/**
+ * What a STATUS cell in an import does to one store.
+ *
+ * 🔴 "Active" on a store that is Closed today does NOT reopen it. The Stores
+ * export writes "Active" for every open store, so an old export sent back
+ * after a store was closed would otherwise quietly reopen it and send reps back
+ * to a shut shop. Reopening takes the deliberate word "Reopen". "Closed" still
+ * closes, because closing from a stale file is the safe direction.
+ *
+ *   close       open store, cell says Closed
+ *   reopen      closed store, cell says Reopen
+ *   keptClosed  closed store, cell says Active/Open: left closed, and reported
+ *   none        blank cell, or the cell already matches
+ *   bad         text that is neither, reported
+ */
+export type ImportStatusOutcome = "close" | "reopen" | "keptClosed" | "none" | "bad";
+
+export function importStatusOutcome(store: Pick<Store, "closed">, raw: string): ImportStatusOutcome {
+  const wantClosed = parseStatusCell(raw);
+  if (wantClosed === null) return "bad";
+  if (wantClosed === undefined) return "none";
+  if (wantClosed) return isClosed(store) ? "none" : "close";
+  if (!isClosed(store)) return "none";
+  return REOPEN_WORDS.includes((raw ?? "").trim().toLowerCase()) ? "reopen" : "keptClosed";
 }

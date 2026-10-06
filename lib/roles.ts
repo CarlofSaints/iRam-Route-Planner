@@ -15,7 +15,7 @@
  * that lives there can be switched off by editing the Roles page.
  */
 
-import type { UserRole } from "./types";
+import type { Store, UserRole } from "./types";
 
 export function isTeamRole(role: string | undefined | null): boolean {
   return role === "teamManager" || role === "teamAdmin";
@@ -58,4 +58,30 @@ export function canEdit(role: UserRole | string | undefined | null, area: EditAr
 
 export function editRefusal(area: EditArea): string {
   return `Your role can't change ${EDIT_AREA_LABEL[area]}. Ask an admin or a team admin.`;
+}
+
+/**
+ * Every rep code a store is allocated to, in any visit role slot: the primary
+ * rep, each role in roleReps, and the two legacy slots not yet migrated.
+ */
+export function storeRepCodes(
+  store: Pick<Store, "repCode" | "roleReps" | "repCode2" | "repCode3">
+): string[] {
+  const codes = [store.repCode, ...Object.values(store.roleReps ?? {}), store.repCode2, store.repCode3];
+  return codes.map((c) => (c || "").trim()).filter(Boolean);
+}
+
+/**
+ * May a team-role caller edit this store?
+ *
+ * Only when a rep in THEIR team calls on it, in any role. Fails closed: a
+ * caller whose team did not resolve at sign-in has no team reps, so the answer
+ * is no rather than "everything".
+ */
+export function storeInTeam(
+  store: Pick<Store, "repCode" | "roleReps" | "repCode2" | "repCode3">,
+  teamRepCodes: ReadonlySet<string>
+): boolean {
+  if (teamRepCodes.size === 0) return false;
+  return storeRepCodes(store).some((c) => teamRepCodes.has(c));
 }

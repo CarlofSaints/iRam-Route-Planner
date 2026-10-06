@@ -348,3 +348,19 @@ export function filterNotInCycle(
     return true;
   });
 }
+
+/**
+ * How many rows each reason would show, given every OTHER filter on screen.
+ *
+ * The Reason dropdown's counts. Counting from the unfiltered result made
+ * "Bad GPS (40)" open on 12 rows when the Status filter said Open only.
+ */
+export function reasonCountsFor(
+  result: NotInCycleResult,
+  reps: Rep[],
+  f: NotInCycleFilter
+): Record<NotInCycleReason, number> {
+  const counts = Object.fromEntries(Object.keys(REASONS).map((k) => [k, 0])) as Record<NotInCycleReason, number>;
+  for (const { reason } of filterNotInCycle(result, reps, { ...f, reason: "" })) counts[reason]++;
+  return counts;
+}
