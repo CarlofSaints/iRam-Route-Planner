@@ -180,7 +180,11 @@ export default function RoutesPage() {
     () => (selectedReps.size > 0 ? filteredReps.filter((r) => selectedReps.has(r.code)) : filteredReps),
     [selectedReps, filteredReps]
   );
-  const isSubset = selectedReps.size > 0 && selectedReps.size < filteredReps.length;
+  // 🔴 "Everyone" means every rep in the business, not everyone in view. A
+  // team manager, or an admin with a team picked, sees one team; treating that
+  // team as everyone would write the business-wide default and regenerate
+  // every other team's week as a side effect.
+  const isSubset = targetReps.length < reps.length;
 
   // The grid always has to be drawing SOMEBODY. When the ticked set changes
   // out from under the viewed rep, follow it rather than going blank.
@@ -312,10 +316,13 @@ export default function RoutesPage() {
     setError("");
     try {
       const payload: Record<string, unknown> = {};
-      // An explicit list wins. Otherwise a plain Generate covers whoever is
-      // ticked, and everybody when nothing is.
-      const codes = opts.repCodes ?? (selectedReps.size > 0 ? [...selectedReps] : []);
-      if (codes.length > 0 && codes.length < filteredReps.length) payload.repCodes = codes;
+      // An explicit list wins. Otherwise Generate covers whoever is ticked, and
+      // with nobody ticked, whoever is in view (a team manager's team, or the
+      // team an admin picked). Only a run covering every rep goes out without
+      // a list, which is the one case the server replaces the whole plan.
+      const codes =
+        opts.repCodes ?? (selectedReps.size > 0 ? [...selectedReps] : filteredReps.map((r) => r.code));
+      if (codes.length > 0 && codes.length < reps.length) payload.repCodes = codes;
       if (selectedTypeId) payload.typeId = selectedTypeId;
       // Sent explicitly so a full run uses what the box says, not what was
       // last saved. They are the same after Apply, and differ if someone
@@ -633,7 +640,8 @@ export default function RoutesPage() {
               {selectedReps.size === 0 ? (
                 <span>
                   Tick reps in the <span className="font-medium">Reps</span> list below to try this on
-                  a few of them first. With none ticked it applies to everyone.
+                  a few of them first. With none ticked it applies to{" "}
+                  {isSubset ? `the ${filteredReps.length} reps shown` : "everyone"}.
                 </span>
               ) : previewing ? (
                 <span className="text-gray-700">
