@@ -35,6 +35,10 @@ assert(isRepAllowedPath("/api/account/avatar"), "a rep may change their photo");
 assert(isRepAllowedPath("/api/auth"), "a rep may sign out");
 assert(isRepAllowedPath("/api/auth/change-password"), "a rep may set their password on first sign-in");
 assert(isRepAllowedPath("/login"), "a rep may reach the login page");
+assert(isRepAllowedPath("/my-route"), "a rep may open their own route");
+assert(isRepAllowedPath("/api/my-route"), "a rep may call their own route API");
+assert(!isRepAllowedPath("/my-routes-export"), "a lookalike is not let through by /my-route");
+assert(!isRepAllowedPath("/api/my-route-all"), "a lookalike is not let through by /api/my-route");
 
 assert(!isRepAllowedPath("/"), "a rep may NOT open the dashboard");
 assert(!isRepAllowedPath("/reps"), "a rep may NOT open the rep list");
