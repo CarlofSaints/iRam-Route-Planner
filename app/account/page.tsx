@@ -1,9 +1,13 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import dynamic from "next/dynamic";
 import { useSession } from "@/components/SessionProvider";
 import { ManagerInfo } from "@/lib/manager";
 import { passwordProblem, PASSWORD_HINT } from "@/lib/passwordRules";
+
+// Leaflet touches `window`, so the map can only load in the browser.
+const PinDropMap = dynamic(() => import("@/components/PinDropMap"), { ssr: false });
 
 interface ProfileUser {
   id: string;
@@ -84,6 +88,10 @@ export default function AccountPage() {
   const [locating, setLocating] = useState(false);
   const [homeMessage, setHomeMessage] = useState("");
   const [homeError, setHomeError] = useState("");
+  // Where Google thinks a typed address is when it isn't sure enough to save.
+  // The pin map opens there so the rep only nudges it onto their house.
+  const [approx, setApprox] = useState<{ lat: number; lng: number } | null>(null);
+  const [picking, setPicking] = useState(false);
 
   useEffect(() => {
     fetch("/api/account")
@@ -113,7 +121,12 @@ export default function AccountPage() {
   }, []);
 
   /** One writer for both paths, so the address and a device fix can't diverge. */
-  const saveHome = async (payload: { homeAddress?: string; lat?: number; lng?: number }) => {
+  const saveHome = async (payload: {
+    homeAddress?: string;
+    lat?: number;
+    lng?: number;
+    source?: "map";
+  }) => {
     setHomeMessage("");
     setHomeError("");
     const res = await fetch("/api/account/rep-profile", {
@@ -129,6 +142,13 @@ export default function AccountPage() {
     setRep(data.rep);
     setHomeAddress(data.rep.homeAddress || "");
     if (data.note) setHomeMessage(data.note);
+    // Found the area but not the house: open the map there instead of leaving
+    // the rep with an address and no pin. That state is what kept reps on the
+    // weekly reminder after they believed they had set their home.
+    if (data.approx) {
+      setApprox({ lat: data.approx.lat, lng: data.approx.lng });
+      setPicking(true);
+    }
   };
 
   const saveAddress = async () => {
@@ -442,11 +462,37 @@ export default function AccountPage() {
               </svg>
               {locating ? "Getting your location..." : "Use my current location"}
             </button>
+            <button
+              onClick={() => setPicking(true)}
+              disabled={locating || homeSaving}
+              className="ml-2 inline-flex items-center gap-2 rounded-lg border border-gray-300 px-4 py-2 text-sm font-medium text-gray-700 transition-colors hover:bg-gray-50 disabled:opacity-50"
+            >
+              Drop a pin on the map
+            </button>
             <p className="mt-2 text-xs text-gray-500">
-              Do this <strong className="font-semibold">while you are at home</strong> — it pins the exact
-              spot, which matters most if your address is hard to find on a map.
+              Use my current location <strong className="font-semibold">while you are at home</strong>, or
+              drop a pin on your house from anywhere.
             </p>
           </div>
+
+          {picking && (
+            <PinDropMap
+              storeName="your home"
+              nearby={[]}
+              initial={
+                approx ??
+                (rep.hasCoordinates ? { lat: Number(rep.homeGpsLat), lng: Number(rep.homeGpsLng) } : null)
+              }
+              onCancel={() => setPicking(false)}
+              onPick={async (lat, lng) => {
+                setPicking(false);
+                setHomeSaving(true);
+                await saveHome({ homeAddress, lat, lng, source: "map" });
+                setApprox(null);
+                setHomeSaving(false);
+              }}
+            />
+          )}
 
           {homeMessage && (
             <p className="mt-3 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-700">{homeMessage}</p>
