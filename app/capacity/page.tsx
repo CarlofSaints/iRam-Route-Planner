@@ -2,7 +2,10 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
-import { Team } from "@/lib/types";
+import { Team, VisitRole } from "@/lib/types";
+import { useTableSort, useSortedRows, SortableTh } from "@/components/TableSort";
+import { TeamFilter } from "@/components/TeamFilter";
+import { EMPTY_SELECTION, filterRepsByTeam, type TeamSelection } from "@/lib/teamFilter";
 
 interface RepCapacity {
   repCode: string;
@@ -69,6 +72,8 @@ export default function CapacityPage() {
   const [radiusInput, setRadiusInput] = useState("150");
   const [savingRadius, setSavingRadius] = useState(false);
   const [confirming, setConfirming] = useState<string | null>(null);
+  const [teamSel, setTeamSel] = useState<TeamSelection>(EMPTY_SELECTION);
+  const [visitRoles, setVisitRoles] = useState<VisitRole[]>([]);
 
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
   const isTeamManager = session?.role === "teamManager";
@@ -90,7 +95,9 @@ export default function CapacityPage() {
       fetch("/api/reps/capacity").then((r) => r.json()).catch(() => null),
       fetch("/api/teams").then((r) => r.json()).catch(() => []),
       fetch("/api/reps/outliers").then((r) => r.json()).catch(() => null),
-    ]).then(([cap, tm, out]) => {
+      fetch("/api/visit-roles").then((r) => r.json()).catch(() => []),
+    ]).then(([cap, tm, out, vr]) => {
+      setVisitRoles(Array.isArray(vr) ? vr : []);
       setData(cap && "reps" in cap ? cap : null);
       setTeams(Array.isArray(tm) ? tm : []);
       if (out && "stores" in out) {
@@ -134,13 +141,31 @@ export default function CapacityPage() {
     return (id: string) => m.get(id) || "Unassigned";
   }, [teams]);
 
-  // Role scoping
-  const reps = useMemo(() => {
+  // Role scoping first; the team filter only narrows within it.
+  const roleScoped = useMemo(() => {
     const all = data?.reps ?? [];
     if (isRep && session?.repCode) return all.filter((r) => r.repCode === session.repCode);
     if (isTeamManager && session?.teamId) return all.filter((r) => r.teamId === session.teamId);
     return all;
   }, [data, isRep, isTeamManager, session?.repCode, session?.teamId]);
+
+  // Everything below (cards, recommendation, grid, out-of-range list) follows
+  // the team filter, so the roll-up always describes the rows on screen.
+  const reps = useMemo(
+    () => (isAdmin ? filterRepsByTeam(teams, teamSel, roleScoped) : roleScoped),
+    [isAdmin, teams, teamSel, roleScoped]
+  );
+
+  /**
+   * "N unassigned" links to exactly those stores on the Stores page. Only for
+   * the sales role: the Stores page filters on the store's sales rep, so a QC
+   * rep's link would land on somebody else's stores.
+   */
+  const primaryRoleId = visitRoles.find((r) => r.isPrimary)?.id ?? "sales";
+  const unroutedHref = (r: RepCapacity) =>
+    !r.visitRoleId || r.visitRoleId === primaryRoleId
+      ? `/stores?rep=${encodeURIComponent(r.repCode)}&unrouted=1`
+      : null;
 
   // Outlier stores scoped to the reps this user can see
   const visibleRepCodes = useMemo(() => new Set(reps.map((r) => r.repCode)), [reps]);
@@ -174,9 +199,23 @@ export default function CapacityPage() {
     [reps]
   );
 
-  const sorted = useMemo(
-    () => [...reps].sort((a, b) => b.utilization - a.utilization),
-    [reps]
+  // Busiest first by default, as before; every column now sorts.
+  const sort = useTableSort("util", "desc", ["util", "stores", "calls", "hours", "spare", "outliers"]);
+  const sorted = useSortedRows(
+    reps,
+    {
+      rep: (r) => r.repName,
+      team: (r) => (r.teamId ? teamName(r.teamId) : null),
+      stores: (r) => r.storeCount,
+      calls: (r) => r.callsPerMonth,
+      hours: (r) => (r.hasRoute ? r.scheduledHours : null),
+      // A rep with no route has no utilisation, not 0%: it sinks either way.
+      util: (r) => (r.hasRoute ? r.utilization : null),
+      spare: (r) => (r.hasRoute ? r.spareHours : null),
+      outliers: (r) => outlierCount(r.repCode),
+      flags: (r) => r.unassignedStores + r.overCapacityDays,
+    },
+    sort
   );
 
   const roll = useMemo(() => {
@@ -248,6 +287,8 @@ export default function CapacityPage() {
             )}
           </p>
         </div>
+        <div className="flex items-center gap-2">
+        {isAdmin && <TeamFilter teams={teams} value={teamSel} onChange={setTeamSel} reps={roleScoped} />}
         {reps.length > 0 && (
           <a
             href="/api/reps/capacity/export"
@@ -259,6 +300,7 @@ export default function CapacityPage() {
             Export Excel
           </a>
         )}
+        </div>
       </div>
 
       {/* No-routes prompt */}
@@ -310,15 +352,15 @@ export default function CapacityPage() {
           <table className="w-full text-sm">
             <thead>
               <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wider">
-                <th className="px-4 py-3">Rep</th>
-                {isAdmin && <th className="px-4 py-3">Team</th>}
-                <th className="px-4 py-3 text-right">Stores</th>
-                <th className="px-4 py-3 text-right">Calls/mo</th>
-                <th className="px-4 py-3 text-right">Hrs used / avail</th>
-                <th className="px-4 py-3 w-48">Utilisation</th>
-                <th className="px-4 py-3 text-right">Spare (h)</th>
-                <th className="px-4 py-3 text-right">Out of range</th>
-                <th className="px-4 py-3">Flags</th>
+                <SortableTh sortId="rep" sort={sort} className="px-4 py-3">Rep</SortableTh>
+                {isAdmin && <SortableTh sortId="team" sort={sort} className="px-4 py-3">Team</SortableTh>}
+                <SortableTh sortId="stores" sort={sort} align="right" className="px-4 py-3">Stores</SortableTh>
+                <SortableTh sortId="calls" sort={sort} align="right" className="px-4 py-3">Calls/mo</SortableTh>
+                <SortableTh sortId="hours" sort={sort} align="right" className="px-4 py-3">Hrs used / avail</SortableTh>
+                <SortableTh sortId="util" sort={sort} className="px-4 py-3 w-48">Utilisation</SortableTh>
+                <SortableTh sortId="spare" sort={sort} align="right" className="px-4 py-3">Spare (h)</SortableTh>
+                <SortableTh sortId="outliers" sort={sort} align="right" className="px-4 py-3">Out of range</SortableTh>
+                <SortableTh sortId="flags" sort={sort} className="px-4 py-3">Flags</SortableTh>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -383,11 +425,20 @@ export default function CapacityPage() {
                             {r.overCapacityDays} over-cap day{r.overCapacityDays > 1 ? "s" : ""}
                           </span>
                         )}
-                        {r.unassignedStores > 0 && (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700">
-                            {r.unassignedStores} unassigned
-                          </span>
-                        )}
+                        {r.unassignedStores > 0 &&
+                          (unroutedHref(r) ? (
+                            <a
+                              href={unroutedHref(r)!}
+                              title="Open the Stores page on this rep's stores that no day of the cycle visits, with why"
+                              className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700 underline decoration-dotted hover:bg-amber-100"
+                            >
+                              {r.unassignedStores} unassigned
+                            </a>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium bg-amber-50 text-amber-700">
+                              {r.unassignedStores} unassigned
+                            </span>
+                          ))}
                         {r.hasRoute && r.overCapacityDays === 0 && r.unassignedStores === 0 && (
                           <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-medium ${band.bg} ${band.text}`}>
                             {band.label}

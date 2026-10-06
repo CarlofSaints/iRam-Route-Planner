@@ -2,6 +2,8 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
+import { CoordinateEntry } from "@/components/CoordinateEntry";
+import { parseLatLng } from "@/lib/latlng";
 import {
   Rep,
   Team,
@@ -183,10 +185,30 @@ export default function RoutesPage() {
   };
 
   // Get current rep's plan
+  // With no rep picked, show the first plan of a rep IN SCOPE. Falling back to
+  // repPlans[0], the first rep in the document, made the header, grid and
+  // unassigned list describe a rep from another team under a team filter
+  // (found in Clippa 9e9ed39).
   const currentPlan: RepRoutePlan | null = useMemo(() => {
-    if (!routes || !selectedRep) return routes?.repPlans?.[0] || null;
+    if (!routes?.repPlans) return null;
+    if (!selectedRep) {
+      const inScope = new Set(filteredReps.map((r) => r.code));
+      return routes.repPlans.find((p) => inScope.has(p.repCode)) || null;
+    }
     return routes.repPlans.find((p) => p.repCode === selectedRep) || null;
-  }, [routes, selectedRep]);
+  }, [routes, selectedRep, filteredReps]);
+
+  /** The plan's rep's placed stores, so the pin picker opens on their patch. */
+  const nearbyForPlan = useMemo(() => {
+    if (!currentPlan) return [];
+    const out: { lat: number; lng: number; name: string }[] = [];
+    for (const s of stores) {
+      if (s.repCode !== currentPlan.repCode) continue;
+      const p = parseLatLng(s.gpsLat, s.gpsLng);
+      if (p) out.push({ ...p, name: s.name });
+    }
+    return out;
+  }, [stores, currentPlan]);
 
   // Build week/day grid lookup
   const grid = useMemo(() => {
@@ -539,31 +561,27 @@ export default function RoutesPage() {
                       ×{g.storeIds.length}
                     </span>
                   )}
+                  {/* Labelled boxes, swap detection and a pin picker instead of
+                      two boxes labelled only by a placeholder that vanishes on
+                      the first keystroke (Clippa a075285, 16b5576). */}
                   {isGps && !fixed && (
-                    <span className="flex items-center gap-1 ml-1">
-                      <input
-                        value={gpsValue(primary, "lat")}
-                        onChange={(e) => setGpsField(primary, "lat", e.target.value)}
-                        placeholder="lat e.g. -26.1"
-                        className="w-28 border border-amber-300 rounded px-2 py-0.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-iram-green"
+                    <div className="basis-full ml-8 mt-1 mb-1">
+                      <CoordinateEntry
+                        lat={gpsValue(primary, "lat")}
+                        lng={gpsValue(primary, "lng")}
+                        onChange={(lat, lng) => {
+                          setGpsField(primary, "lat", lat);
+                          setGpsField(primary, "lng", lng);
+                        }}
+                        onSave={() => saveGps(g.storeIds)}
+                        saving={gpsSaving === primary}
+                        storeName={g.storeName}
+                        nearby={nearbyForPlan}
                       />
-                      <input
-                        value={gpsValue(primary, "lng")}
-                        onChange={(e) => setGpsField(primary, "lng", e.target.value)}
-                        placeholder="lng e.g. 28.0"
-                        className="w-28 border border-amber-300 rounded px-2 py-0.5 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-iram-green"
-                      />
-                      <button
-                        onClick={() => saveGps(g.storeIds)}
-                        disabled={gpsSaving === primary}
-                        className="px-2 py-0.5 bg-iram-green text-white rounded text-xs font-medium hover:bg-iram-green-dark disabled:opacity-50"
-                      >
-                        {gpsSaving === primary ? "Saving..." : "Save GPS"}
-                      </button>
-                    </span>
+                    </div>
                   )}
                   {isGps && fixed && (
-                    <span className="text-green-700 font-medium ml-1">✓ GPS saved — regenerate routes to schedule</span>
+                    <span className="text-green-700 font-medium ml-1">GPS saved. Regenerate routes to schedule it, and correct it in Perigee too.</span>
                   )}
                   {isRange && (
                     <>
