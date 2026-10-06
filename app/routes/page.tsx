@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
+import { FilterDropdown } from "@/components/FilterDropdown";
 import {
   Rep,
   Team,
@@ -44,7 +45,12 @@ export default function RoutesPage() {
   const [loading, setLoading] = useState(true);
   const [generating, setGenerating] = useState(false);
   const [selectedTeam, setSelectedTeam] = useState("");
-  const [selectedRep, setSelectedRep] = useState("");
+  // Which reps a target applies to. A set, because the useful unit is a
+  // SUBSET: ten reps moved to eight calls a day while the rest stay put.
+  const [selectedReps, setSelectedReps] = useState<Set<string>>(new Set());
+  // Whose week the grid is drawing. A grid can only show one, and it is not
+  // the same question as who the change applies to.
+  const [viewingRep, setViewingRep] = useState("");
   const [includeTimes, setIncludeTimes] = useState(true);
   const [selectedCell, setSelectedCell] = useState<{
     week: WeekLabel;
@@ -52,6 +58,20 @@ export default function RoutesPage() {
   } | null>(null);
   const [error, setError] = useState("");
   const [routeTypes, setRouteTypes] = useState<RouteTypeInfo[]>([]);
+
+  // Calls per day.
+  //
+  // `saved` is what every rep's week is currently built on; `callsPerDay` is
+  // what the box says right now. They are separate because typing a number
+  // must be able to preview ONE rep without committing the other 63 to it.
+  // Null in either means no target, which is a real setting and not an unset
+  // one: it hands day sizing back to the clock.
+  const [callsPerDay, setCallsPerDay] = useState<number | null>(null);
+  const [savedCallsPerDay, setSavedCallsPerDay] = useState<number | null>(null);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const [previewNote, setPreviewNote] = useState<string | null>(null);
+  const [applying, setApplying] = useState(false);
   const [selectedTypeId, setSelectedTypeId] = useState("");
 
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
@@ -112,7 +132,8 @@ export default function RoutesPage() {
   // Auto-select rep for rep users
   useEffect(() => {
     if (isRep && session?.repCode && reps.length > 0) {
-      setSelectedRep(session.repCode);
+      setViewingRep(session.repCode);
+      setSelectedReps(new Set([session.repCode]));
     }
   }, [isRep, session?.repCode, reps]);
 
@@ -135,13 +156,169 @@ export default function RoutesPage() {
     return scoped;
   }, [reps, isRep, isTeamManager, isAdmin, session?.repCode, session?.teamId, selectedTeam]);
 
-  const generateRoutes = async () => {
+
+  /**
+   * Each rep's calls-per-day target, taken off the saved plan rather than the
+   * settings blob. After a subset run the two legitimately differ, and the
+   * setting would describe a week those reps do not have.
+   */
+  const repCallsPerDay = useMemo(() => {
+    const out: Record<string, number | undefined> = {};
+    for (const p of routes?.repPlans ?? []) out[p.repCode] = p.callsPerDay;
+    return out;
+  }, [routes]);
+  /**
+   * The reps a calls-per-day change applies to.
+   *
+   * Nothing ticked means everybody in view, which is what the page did before
+   * a subset was possible and stays the least surprising reading of an empty
+   * selection. Ticking any rep narrows it to exactly those.
+   */
+  const targetReps = useMemo(
+    () => (selectedReps.size > 0 ? filteredReps.filter((r) => selectedReps.has(r.code)) : filteredReps),
+    [selectedReps, filteredReps]
+  );
+  const isSubset = selectedReps.size > 0 && selectedReps.size < filteredReps.length;
+
+  // The grid always has to be drawing SOMEBODY. When the ticked set changes
+  // out from under the viewed rep, follow it rather than going blank.
+  useEffect(() => {
+    if (selectedReps.size === 0) return;
+    if (viewingRep && selectedReps.has(viewingRep)) return;
+    setViewingRep([...selectedReps][0] ?? "");
+  }, [selectedReps, viewingRep]);
+  // 🔴 Seeded from the server, never defaulted in the markup. A box that starts
+  // on 8 while the business is on no target would apply 8 the first time
+  // anyone touched anything else on this page.
+  useEffect(() => {
+    fetch("/api/settings", { cache: "no-store" })
+      .then((r) => r.json())
+      .then((d) => {
+        const v = typeof d?.callsPerDay === "number" ? d.callsPerDay : null;
+        setCallsPerDay(v);
+        setSavedCallsPerDay(v);
+      })
+      .catch(() => {})
+      .finally(() => setSettingsLoaded(true));
+  }, []);
+
+  /**
+   * Rebuild the ticked reps at the number in the box.
+   *
+   * One rep takes a second or two; ten take a few. That is the whole point of
+   * previewing a subset rather than the whole book: the manager sees what
+   * eight calls a day does to THESE reps before anyone else moves.
+   *
+   * ⚠️ The ticked reps' new weeks ARE saved (the generate route always saves).
+   * The server merges them into the saved plan, so reps outside the selection
+   * keep the week they already had, and the business-wide default is only
+   * written by Apply to everyone. The copy on the page says so.
+   */
+  const previewForReps = async (codes: string[], calls: number | null) => {
+    if (codes.length === 0) return;
+    setPreviewing(true);
+    setError("");
+    const started = Date.now();
+    try {
+      const res = await fetch("/api/routes/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          repCodes: codes,
+          ...(selectedTypeId ? { typeId: selectedTypeId } : {}),
+          // Explicit null asks for no target. Omitting it would inherit the
+          // saved setting, which is the opposite of what the box says.
+          callsPerDay: calls,
+        }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      const doc = await res.json();
+      setRoutes(doc);
+
+      const touched = (doc.repPlans ?? []).filter((p: RepRoutePlan) => codes.includes(p.repCode));
+      const counts = touched.flatMap((p: RepRoutePlan) => p.days.map((d) => d.stops.length));
+      const seconds = ((Date.now() - started) / 1000).toFixed(1);
+      const who = touched.length === 1 ? touched[0].repName : `${touched.length} reps`;
+      setPreviewNote(
+        touched.length
+          ? `${who} rebuilt at ${calls ? `${calls} calls/day` : "no target"} in ${seconds}s` +
+            (counts.length ? `: ${Math.min(...counts)} to ${Math.max(...counts)} calls a day` : "")
+          : null
+      );
+    } catch (err) {
+      setError(String(err));
+      setPreviewNote(null);
+    } finally {
+      setPreviewing(false);
+    }
+  };
+  /**
+   * Commit the number to the reps in scope.
+   *
+   * 🔴 Only a run covering EVERYONE writes the business-wide setting. Moving
+   * ten reps to eight calls a day is not a decision about the other 45, and
+   * saving it as the default would silently apply it to all of them the next
+   * time anybody pressed Generate Routes.
+   *
+   * When it does save, it saves FIRST. A rebuild that succeeded against a
+   * setting that failed to save would leave the plan and the stated target
+   * disagreeing, and the next Generate would quietly undo the whole thing.
+   */
+  const applyCallsPerDay = async () => {
+    setApplying(true);
+    setError("");
+    try {
+      if (!isSubset) {
+        const res = await fetch("/api/settings", {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callsPerDay: callsPerDay ?? null }),
+        });
+        if (!res.ok) throw new Error("Could not save the calls per day setting.");
+        setSavedCallsPerDay(callsPerDay);
+      }
+      setPreviewNote(null);
+      await generateRoutes({ repCodes: targetReps.map((r) => r.code) });
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setApplying(false);
+    }
+  };
+  // Debounced preview. Waits for the typing to stop, so dragging 8 to 12 fires
+  // one rebuild rather than five.
+  //
+  // Deliberately does NOT fire when the selection is everybody: rebuilding all
+  // 55 reps on every keystroke is a two-minute job and a Google bill. A whole-
+  // book change goes through the button, where it is asked for on purpose.
+  useEffect(() => {
+    if (!settingsLoaded || !canGenerate) return;
+    if (selectedReps.size === 0) return;
+    if (callsPerDay === savedCallsPerDay) return;
+    const codes = [...selectedReps];
+    const t = setTimeout(() => previewForReps(codes, callsPerDay), 700);
+    return () => clearTimeout(t);
+    // previewForReps is recreated every render; depending on it would refire
+    // the timer on every keystroke elsewhere on the page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [callsPerDay, selectedReps, settingsLoaded, savedCallsPerDay, canGenerate, selectedTypeId]);
+  const generateRoutes = async (opts: { repCodes?: string[] } = {}) => {
     setGenerating(true);
     setError("");
     try {
       const payload: Record<string, unknown> = {};
-      if (selectedRep) payload.repCodes = [selectedRep];
+      // An explicit list wins. Otherwise a plain Generate covers whoever is
+      // ticked, and everybody when nothing is.
+      const codes = opts.repCodes ?? (selectedReps.size > 0 ? [...selectedReps] : []);
+      if (codes.length > 0 && codes.length < filteredReps.length) payload.repCodes = codes;
       if (selectedTypeId) payload.typeId = selectedTypeId;
+      // Sent explicitly so a full run uses what the box says, not what was
+      // last saved. They are the same after Apply, and differ if someone
+      // presses Generate Routes with an uncommitted number in the box.
+      payload.callsPerDay = callsPerDay ?? null;
       const res = await fetch("/api/routes/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -184,9 +361,9 @@ export default function RoutesPage() {
 
   // Get current rep's plan
   const currentPlan: RepRoutePlan | null = useMemo(() => {
-    if (!routes || !selectedRep) return routes?.repPlans?.[0] || null;
-    return routes.repPlans.find((p) => p.repCode === selectedRep) || null;
-  }, [routes, selectedRep]);
+    if (!routes || !viewingRep) return routes?.repPlans?.[0] || null;
+    return routes.repPlans.find((p) => p.repCode === viewingRep) || null;
+  }, [routes, viewingRep]);
 
   // Build week/day grid lookup
   const grid = useMemo(() => {
@@ -328,6 +505,14 @@ export default function RoutesPage() {
                       {routes.callCycleTypeName}
                     </span>
                   )}
+                  {/* Read off the PLAN, not the setting. The setting can be
+                      changed without regenerating, and showing it here would
+                      describe a week nobody has. */}
+                  {routes.config.callsPerDay ? (
+                    <span className="ml-2 inline-block bg-blue-50 text-blue-700 text-xs font-medium px-2 py-0.5 rounded">
+                      {routes.config.callsPerDay} calls/day
+                    </span>
+                  ) : null}
                 </>
               : "No routes generated yet"}
           </p>
@@ -343,7 +528,7 @@ export default function RoutesPage() {
           )}
           {canGenerate && (
             <button
-              onClick={generateRoutes}
+              onClick={() => generateRoutes()}
               disabled={generating}
               className="bg-iram-green text-white px-5 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark disabled:opacity-50 transition-colors flex items-center gap-2"
             >
@@ -362,6 +547,102 @@ export default function RoutesPage() {
         </div>
       )}
 
+      {/* Calls per day */}
+      {canGenerate && (
+        <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 mb-4">
+          <div className="flex flex-wrap items-center gap-4">
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">Calls per day</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={callsPerDay ?? ""}
+                  placeholder="No target"
+                  onChange={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === "") return setCallsPerDay(null);
+                    const v = Number(raw);
+                    setCallsPerDay(Number.isFinite(v) && v >= 1 ? Math.min(Math.round(v), 30) : null);
+                  }}
+                  className="w-28 border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+                />
+                {callsPerDay !== null && (
+                  <button
+                    onClick={() => setCallsPerDay(null)}
+                    className="text-xs text-gray-400 hover:text-gray-700"
+                    title="Size days by the working day instead of a fixed number of calls"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="flex-1 min-w-[16rem] text-xs text-gray-500">
+              {selectedReps.size === 0 ? (
+                <span>
+                  Tick reps in the <span className="font-medium">Reps</span> list below to try this on
+                  a few of them first. With none ticked it applies to everyone.
+                </span>
+              ) : previewing ? (
+                <span className="text-gray-700">
+                  Rebuilding {selectedReps.size === 1 ? "that rep" : `${selectedReps.size} reps`}&hellip;
+                </span>
+              ) : previewNote ? (
+                <span className="text-green-700 font-medium">{previewNote}</span>
+              ) : (
+                <span>
+                  Change the number and{" "}
+                  {selectedReps.size === 1 ? "this rep's week is" : `these ${selectedReps.size} reps' weeks are`}{" "}
+                  rebuilt and saved straight away. Nobody else moves until you apply it to them.
+                </span>
+              )}
+              {/* What the SAVED default is, so an uncommitted number in the box
+                  can never be mistaken for the business setting. */}
+              <div className="mt-1 text-gray-400">
+                Everyone defaults to{" "}
+                {savedCallsPerDay ? `${savedCallsPerDay} calls a day` : "no target (days sized by working hours)"}.
+                {isSubset && (
+                  <span className="text-gray-500">
+                    {" "}Applying to a subset changes those reps only, and leaves this default alone.
+                  </span>
+                )}
+              </div>
+            </div>
+            <button
+              onClick={applyCallsPerDay}
+              disabled={
+                applying ||
+                generating ||
+                targetReps.length === 0 ||
+                // A whole-book apply is only pointless when the default already
+                // matches. A SUBSET apply is never pointless: those reps may be
+                // on something else entirely.
+                (!isSubset && callsPerDay === savedCallsPerDay)
+              }
+              className="bg-gray-900 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-gray-700 disabled:opacity-40 transition-colors flex items-center gap-2"
+            >
+              {applying && (
+                <div className="animate-spin w-4 h-4 border-2 border-white border-t-transparent rounded-full" />
+              )}
+              {applying
+                ? `Applying to ${targetReps.length === 1 ? "1 rep" : `${targetReps.length} reps`}...`
+                : !isSubset && callsPerDay === savedCallsPerDay
+                  ? "Applied to everyone"
+                  : `Apply ${callsPerDay ? `${callsPerDay} calls/day` : "no target"} to ${
+                      isSubset
+                        ? targetReps.length === 1
+                          ? "1 rep"
+                          : `${targetReps.length} reps`
+                        : `all ${targetReps.length} reps`
+                    }`}            </button>
+          </div>
+        </div>
+      )}
+
+
       {/* Filters row */}
       <div className="flex items-center gap-4 mb-6 flex-wrap">
         {/* Call cycle type dropdown — always visible when types exist */}
@@ -371,7 +652,8 @@ export default function RoutesPage() {
             onChange={(e) => {
               const val = e.target.value;
               setSelectedTypeId(val);
-              setSelectedRep("");
+              setViewingRep("");
+              setSelectedReps(new Set());
               setSelectedCell(null);
               if (!val) {
                 // Reload generic routes when "Latest Routes" selected
@@ -396,7 +678,8 @@ export default function RoutesPage() {
             value={selectedTeam}
             onChange={(e) => {
               setSelectedTeam(e.target.value);
-              setSelectedRep("");
+              setViewingRep("");
+              setSelectedReps(new Set());
               setSelectedCell(null);
             }}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
@@ -410,22 +693,44 @@ export default function RoutesPage() {
           </select>
         )}
 
-        {/* Rep dropdown — hidden for rep users (auto-selected) */}
+        {/* Reps — a tick list, because the useful unit is a SUBSET. Hidden for
+            rep users, who are pinned to themselves. */}
         {!isRep && (
+          <FilterDropdown
+            label="Reps"
+            options={filteredReps.map((r) => ({
+              value: r.code,
+              // The target each rep is actually on, right in the list, so
+              // picking who to change does not need a second screen.
+              label: `${r.name} (${getVisitRoleName(r.visitRoleId, visitRoles)}) · ${r.code} · ${repCallsPerDay[r.code] ? `${repCallsPerDay[r.code]}/day` : "no target"}`,
+            }))}
+            selected={selectedReps}
+            onChange={(next) => {
+              setSelectedReps(next);
+              setSelectedCell(null);
+            }}
+          />
+        )}
+
+        {/* Which of them the grid is drawing. Only worth showing once there is
+            a choice to make: with one rep ticked there is nothing to pick. */}
+        {!isRep && selectedReps.size > 1 && (
           <select
-            value={selectedRep}
+            value={viewingRep}
             onChange={(e) => {
-              setSelectedRep(e.target.value);
+              setViewingRep(e.target.value);
               setSelectedCell(null);
             }}
             className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+            title="Whose week the grid below is showing"
           >
-            <option value="">Select Rep</option>
-            {filteredReps.map((r) => (
-              <option key={r.code} value={r.code}>
-                {r.name} ({getVisitRoleName(r.visitRoleId, visitRoles)}) · {r.code}
-              </option>
-            ))}
+            {filteredReps
+              .filter((r) => selectedReps.has(r.code))
+              .map((r) => (
+                <option key={r.code} value={r.code}>
+                  Showing {r.name} ({getVisitRoleName(r.visitRoleId, visitRoles)})
+                </option>
+              ))}
           </select>
         )}
 
@@ -468,11 +773,11 @@ export default function RoutesPage() {
               <option value={3}>3 mo</option>
             </select>
             <a
-              href={`/api/routes/perigee-export?months=${perigeeMonths}&format=xlsx${selectedTypeId ? `&typeId=${selectedTypeId}` : ""}${selectedRep ? `&repCode=${selectedRep}` : ""}`}
+              href={`/api/routes/perigee-export?months=${perigeeMonths}&format=xlsx${selectedTypeId ? `&typeId=${selectedTypeId}` : ""}${viewingRep ? `&repCode=${viewingRep}` : ""}`}
               className="bg-gray-800 text-white px-3 py-1.5 rounded-md text-xs font-medium hover:bg-gray-900 transition-colors"
-              title={selectedRep ? "Export this rep's call cycle for Perigee" : "Export all reps' call cycle for Perigee"}
+              title={viewingRep ? "Export this rep's call cycle for Perigee" : "Export all reps' call cycle for Perigee"}
             >
-              Export {selectedRep ? "rep" : "all"}
+              Export {viewingRep ? "rep" : "all"}
             </a>
           </div>
         )}
@@ -767,7 +1072,24 @@ export default function RoutesPage() {
             {(selectedDayPlan.totalVisitTime / 60).toFixed(1)}h visits |{" "}
             {(selectedDayPlan.totalTime / 60).toFixed(1)}h total |{" "}
             {Math.round(selectedDayPlan.totalDistance)}km
-            {selectedDayPlan.overCapacity && " — OVER CAPACITY"}
+            {/* By HOW MUCH, not just that it is over. "Over capacity" on half a
+                rep's days is noise; 8 minutes and two hours are different
+                problems. With a calls-per-day target this is the honest half of
+                the bargain — the day carries what was asked for AND says it
+                runs long, rather than quietly dropping the last call. */}
+            {selectedDayPlan.overCapacity && (
+              <span className="ml-1">
+                {selectedDayPlan.overrunMinutes
+                  ? `| OVER the working day by ${
+                      selectedDayPlan.overrunMinutes >= 60
+                        ? `${Math.floor(selectedDayPlan.overrunMinutes / 60)}h ${selectedDayPlan.overrunMinutes % 60}m`
+                        : `${selectedDayPlan.overrunMinutes}m`
+                    }`
+                  : /* A plan generated before the minutes were recorded. Saying
+                       what is known beats inventing a figure for it. */
+                    "| OVER CAPACITY"}
+              </span>
+            )}
           </div>
         </div>
       )}

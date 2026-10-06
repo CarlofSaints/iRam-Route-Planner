@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, saveRoutes, saveRoutesForType, getCallCycleTypes, getSettings, getVisitRoles, getChannels } from "@/lib/data";
+import { getReps, getStores, saveRoutes, saveRoutesForType, getRoutes, getRoutesForType, getCallCycleTypes, getSettings, getVisitRoles, getChannels } from "@/lib/data";
 import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
 import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
@@ -31,6 +31,20 @@ export async function POST(request: NextRequest) {
       getChannels(),
     ]);
     const outlierRadiusKm = settings.outlierRadiusKm;
+
+    // How many calls a day this run should aim for.
+    //
+    // The body wins over the saved setting so the Routes page can preview a
+    // number BEFORE anyone commits to it: the manager sets 8, one rep is
+    // rebuilt at 8, and the setting is only written when they apply it to
+    // everybody. Sending `null` explicitly asks for no target at all, which is
+    // different from sending nothing and inheriting the saved one.
+    const callsPerDay =
+      body.callsPerDay === null
+        ? undefined
+        : body.callsPerDay !== undefined
+          ? clampCallsPerDay(body.callsPerDay)
+          : settings.callsPerDay;
 
     // Determine strategy: prefer explicit typeId from request, fall back to globally active type
     const resolvedType = body.typeId
@@ -73,6 +87,9 @@ export async function POST(request: NextRequest) {
           visitRoleName: role.name,
           homeLatLng: parseHome(rep),
           workingHoursPerDay: rep.workingHoursPerDay ?? 8.5,
+          // A rep with no stores still carries the target, so the Map dropdown
+          // does not show a blank beside them and read as "not set".
+          callsPerDay: callsPerDay && callsPerDay > 0 ? callsPerDay : undefined,
           generatedAt: new Date().toISOString(),
           days: [],
           stats: { totalStores: 0, unassignedStores: [] },
@@ -80,7 +97,14 @@ export async function POST(request: NextRequest) {
         continue;
       }
 
-      const plan = await generateRepRoute(rep, repStores, startTime, googleDeadline, outlierRadiusKm);
+      const plan = await generateRepRoute(
+        rep,
+        repStores,
+        startTime,
+        googleDeadline,
+        outlierRadiusKm,
+        callsPerDay
+      );
       repPlans.push({ ...plan, visitRoleId: role.id, visitRoleName: role.name });
     }
 
@@ -94,8 +118,33 @@ export async function POST(request: NextRequest) {
       config: {
         useGoogleMaps: hasGoogleMapsKey(),
         defaultStartTime: startTime,
+        // Stamped on the plan, so a page can say what THIS week was built with
+        // rather than reading a setting that may have moved since.
+        callsPerDay,
       },
     };
+
+    // A run for SOME reps must not replace the plan for all of them.
+    //
+    // Previewing one rep at a new calls-per-day writes a document holding that
+    // one rep. Saving it as-is would delete every other rep's week, and the
+    // only sign would be an almost-empty Routes page. So a partial run merges
+    // its reps into the plan already saved, and only a full run replaces it.
+    if (repCodes && repCodes.length > 0) {
+      const existing = activeType ? await getRoutesForType(activeType.id) : await getRoutes();
+      if (existing) {
+        const touched = new Set(repPlans.map((p) => p.repCode));
+        doc.repPlans = [
+          ...existing.repPlans.filter((p) => !touched.has(p.repCode)),
+          ...repPlans,
+        ];
+        // The document still describes the plan as a whole, and most of it was
+        // built with the OLD target. Claiming the new one would misdescribe
+        // every week this run did not touch.
+        doc.config.callsPerDay = existing.config?.callsPerDay;
+        doc.generatedAt = existing.generatedAt;
+      }
+    }
 
     // Save per-type (if active type exists) + latest snapshot
     if (activeType) {
@@ -103,7 +152,15 @@ export async function POST(request: NextRequest) {
     }
     await saveRoutes(doc);
 
-    logActivity({ action: "Generated routes", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Generated routes for ${repPlans.length} reps${activeType ? ` (${activeType.name})` : ""}` });
+    logActivity({
+      action: "Generated routes",
+      actor: session?.email || "unknown",
+      actorName: session?.name || "Unknown",
+      summary:
+        `Generated routes for ${repPlans.length} rep${repPlans.length === 1 ? "" : "s"}` +
+        (activeType ? ` (${activeType.name})` : "") +
+        (callsPerDay ? ` at ${callsPerDay} calls per day` : ""),
+    });
 
     return NextResponse.json(doc);
   } catch (err) {
@@ -113,6 +170,20 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+}
+
+/**
+ * A calls-per-day value we are willing to act on.
+ *
+ * Anything unusable becomes undefined, which means "no target" and returns day
+ * sizing to the clock. It does NOT fall back to a number: a typo silently
+ * becoming 8 would redraw every rep's week and look like the app decided on its
+ * own.
+ */
+function clampCallsPerDay(raw: unknown): number | undefined {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return undefined;
+  return Math.min(Math.round(n), 30);
 }
 
 function parseHome(rep: { homeGpsLat: string; homeGpsLng: string }) {

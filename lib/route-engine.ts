@@ -26,7 +26,8 @@ export async function generateRepRoute(
   stores: Store[],
   startTime: string = DEFAULT_START_TIME,
   googleDeadline?: number,
-  outlierRadiusKm?: number
+  outlierRadiusKm?: number,
+  callsPerDay?: number
 ): Promise<RepRoutePlan> {
   // Separate stores we can actually route (valid GPS) from those with missing
   // or corrupted coordinates. Bad coords (e.g. a lat of -260896520 from a lost
@@ -83,13 +84,24 @@ export async function generateRepRoute(
       (getVisitsPerWeek(s.frequency || "monthly") > 1 ? multiDay : singleDay).push(s);
     }
 
-    // Cluster into 5 day groups
-    const clusters = clusterIntoDays(singleDay, home);
-
+    // A store called on several times a week is pinned to fixed days FIRST, so
+    // the balancer knows how much room each day has left. Pinning after the
+    // balance would silently push days back over the target.
+    const pinnedPerDay = [0, 0, 0, 0, 0];
+    const pins: Store[][] = [[], [], [], [], []];
     for (const store of multiDay) {
       for (const dayIdx of spreadAcrossDays(getVisitsPerWeek(store.frequency || "monthly"))) {
-        (clusters[dayIdx] ||= []).push(store);
+        pins[dayIdx].push(store);
+        pinnedPerDay[dayIdx]++;
       }
+    }
+
+    // Cluster into 5 day groups. The target and the already-pinned stores go
+    // in together: the balancer needs both to know how much room a day has.
+    const clusters = clusterIntoDays(singleDay, home, { callsPerDay, pinnedPerDay });
+
+    for (let dayIdx = 0; dayIdx < pins.length; dayIdx++) {
+      for (const store of pins[dayIdx]) (clusters[dayIdx] ||= []).push(store);
     }
 
     for (let dayIdx = 0; dayIdx < DAYS.length; dayIdx++) {
@@ -107,20 +119,30 @@ export async function generateRepRoute(
         googleDeadline
       );
 
-      // Step 3b: If over capacity, remove last stores
-      if (plan.overCapacity) {
-        const removed = trimToCapacity(plan, workingMinutes);
-        for (const r of removed) {
-          // Carry the whole planned stop, not just its name. It already holds
-          // the store's real coordinates and visit duration, and rebalancing
-          // needs them to put the store back on the map in the right place.
-          unassigned.push({
-            storeId: r.storeId,
-            storeName: r.storeName,
-            reason: "Over daily capacity",
-            stop: r,
-          });
-        }
+      // Step 3b: bring the day back within whichever cap is in force.
+      //
+      // 🔴 With a calls-per-day target the COUNT is the instruction and the
+      // clock is advice. The manager asked for eight calls, so eight are
+      // scheduled and a day that runs long says so, rather than quietly
+      // dropping the eighth store and looking like the setting was ignored.
+      // Without a target, the old time-based trim is untouched.
+      const removed = callsPerDay && callsPerDay > 0
+        ? trimToCount(plan, callsPerDay, workingMinutes)
+        : plan.overCapacity
+          ? trimToCapacity(plan, workingMinutes)
+          : [];
+      for (const r of removed) {
+        // Carry the whole planned stop, not just its name. It already holds
+        // the store's real coordinates and visit duration, and rebalancing
+        // needs them to put the store back on the map in the right place.
+        unassigned.push({
+          storeId: r.storeId,
+          storeName: r.storeName,
+          reason: callsPerDay && callsPerDay > 0
+            ? `Over the ${callsPerDay} calls per day target`
+            : "Over daily capacity",
+          stop: r,
+        });
       }
 
       dayPlans.push(plan);
@@ -133,7 +155,8 @@ export async function generateRepRoute(
     unassigned,
     home,
     startTime,
-    workingMinutes
+    workingMinutes,
+    callsPerDay
   );
 
   const noGpsUnassigned = noGps.map((s) => ({
@@ -153,6 +176,9 @@ export async function generateRepRoute(
     repName: rep.name,
     homeLatLng: home,
     workingHoursPerDay: rep.workingHoursPerDay ?? DEFAULT_WORKING_HOURS,
+    // Stamped on the rep, so a week can say what it was built on even when the
+    // document as a whole was built on something else.
+    callsPerDay: callsPerDay && callsPerDay > 0 ? callsPerDay : undefined,
     generatedAt: new Date().toISOString(),
     days: dayPlans,
     stats: {
@@ -239,7 +265,7 @@ function distributeToWeeks(stores: Store[]): Map<WeekLabel, Store[]> {
 // Step 2: Geographic Clustering (K-Means, K=5)
 // ──────────────────────────────────────────────
 
-interface GeoStore {
+export interface GeoStore {
   store: Store;
   lat: number;
   lng: number;
@@ -247,7 +273,8 @@ interface GeoStore {
 
 function clusterIntoDays(
   stores: Store[],
-  home: { lat: number; lng: number } | null
+  home: { lat: number; lng: number } | null,
+  opts: { callsPerDay?: number; pinnedPerDay?: number[] } = {}
 ): Store[][] {
   const geoStores: GeoStore[] = stores
     .map((s) => ({
@@ -259,7 +286,8 @@ function clusterIntoDays(
 
   if (geoStores.length === 0) return [[], [], [], [], []];
 
-  // For very small sets, just distribute evenly
+  // For very small sets, just distribute evenly. Round-robin already respects
+  // any sane target, because five stores over five days cannot exceed one a day.
   if (geoStores.length <= 5) {
     const clusters: Store[][] = [[], [], [], [], []];
     geoStores.forEach((g, i) => clusters[i % 5].push(g.store));
@@ -309,7 +337,7 @@ function clusterIntoDays(
   // Balance cluster sizes (target ±2 stores)
   const clusters: GeoStore[][] = Array.from({ length: K }, () => []);
   geoStores.forEach((g, i) => clusters[assignments[i]].push(g));
-  balanceClusters(clusters, centroids);
+  balanceClusters(clusters, centroids, opts);
 
   // Sort clusters by angle from home (or centroid center) for geographic ordering
   const refPoint = home || {
@@ -359,18 +387,54 @@ function initializeCentroids(
   return centroids;
 }
 
-function balanceClusters(
+/**
+ * Even out the day groups so no day carries far more calls than the others.
+ *
+ * K-means answers "which stores are near each other", which is the right
+ * question for a driving route and the wrong one for a workload: left alone it
+ * happily returns a Monday of 25 and a Friday of 3. This moves only the
+ * surplus. From each oversized day it takes the store furthest from that day's
+ * own centroid, the one the cluster has least claim to, and gives it to the
+ * nearest day that still has room. The route stays sensible, the load evens.
+ *
+ * Two modes:
+ *   - No target: the original behaviour. Aim for an even split of whatever the
+ *     rep has, tolerating two stores either way.
+ *   - `callsPerDay` set: the manager has named a number, so the cap is exact
+ *     and per day, and `pinnedPerDay` (multi-visit stores already fixed to a
+ *     day, which cannot be moved) counts against that day's room.
+ *
+ * A cap can be UNREACHABLE — five days at eight calls holds forty, and the rep
+ * may have sixty. Nothing here invents days: the surplus stays put and is
+ * trimmed later, where it can be reported as overflow rather than lost here.
+ */
+export function balanceClusters(
   clusters: GeoStore[][],
-  centroids: { lat: number; lng: number }[]
+  centroids: { lat: number; lng: number }[],
+  opts: { callsPerDay?: number; pinnedPerDay?: number[] } = {}
 ): void {
+  const { callsPerDay, pinnedPerDay = [] } = opts;
   const totalStores = clusters.reduce((s, c) => s + c.length, 0);
-  const target = Math.ceil(totalStores / clusters.length);
-  const maxSize = target + 2;
 
-  // Move stores from oversized clusters to undersized ones
-  for (let pass = 0; pass < 3; pass++) {
+  // How many stores this day may hold. With a target it is the target less
+  // whatever is already pinned there; without one it is the old even split
+  // with its two-store tolerance.
+  const capFor = (i: number) =>
+    callsPerDay && callsPerDay > 0
+      ? Math.max(0, callsPerDay - (pinnedPerDay[i] ?? 0))
+      : Math.ceil(totalStores / clusters.length) + 2;
+
+  // Move stores from oversized clusters to undersized ones.
+  //
+  // Runs until a pass changes nothing rather than a fixed three: three passes
+  // were plenty for a soft +2 band, but an exact per-day cap can need more,
+  // and stopping early would leave the day over the number the manager set.
+  // Bounded by the store count, so an unreachable cap terminates instead of
+  // spinning.
+  for (let pass = 0; pass < totalStores + clusters.length; pass++) {
+    let moved = false;
     for (let i = 0; i < clusters.length; i++) {
-      while (clusters[i].length > maxSize) {
+      while (clusters[i].length > capFor(i)) {
         // Find the store farthest from this centroid
         let farthestIdx = 0;
         let farthestDist = 0;
@@ -392,7 +456,7 @@ function balanceClusters(
         let bestCluster = -1;
         let bestDist = Infinity;
         for (let k = 0; k < clusters.length; k++) {
-          if (k === i || clusters[k].length >= maxSize) continue;
+          if (k === i || clusters[k].length >= capFor(k)) continue;
           const d = haversineKm(
             store.lat,
             store.lng,
@@ -408,8 +472,10 @@ function balanceClusters(
         if (bestCluster === -1) break;
         clusters[bestCluster].push(store);
         clusters[i].splice(farthestIdx, 1);
+        moved = true;
       }
     }
+    if (!moved) break;
   }
 }
 
@@ -572,6 +638,52 @@ function nearestNeighborOrder(
   return { ordered, legs };
 }
 
+/**
+ * Cut a day down to the calls-per-day target.
+ *
+ * Trims from the END of the optimised order, so the stores dropped are the ones
+ * furthest along the route rather than an arbitrary few. Unlike the time-based
+ * trim this does NOT stop once the clock is satisfied: the count is the
+ * instruction.
+ *
+ * The day's overrun is recorded on the way out. That is the whole bargain of
+ * letting the target win: the plan schedules what was asked for AND admits when
+ * the day is longer than the rep's hours.
+ */
+function trimToCount(
+  plan: RouteDayPlan,
+  callsPerDay: number,
+  workingMinutes: number
+): RouteStop[] {
+  const removed: RouteStop[] = [];
+  while (plan.stops.length > callsPerDay && plan.stops.length > 1) {
+    const last = plan.stops.pop()!;
+    removed.push(last);
+    plan.totalVisitTime -= last.visitDuration;
+    plan.totalTravelTime -= last.travelTimeFromPrev;
+    plan.totalTime = plan.totalTravelTime + plan.totalVisitTime;
+    plan.totalDistance -= last.distanceFromPrev;
+  }
+  applyOverrun(plan, workingMinutes);
+  return removed;
+}
+
+/**
+ * Record how far past the working day this one runs.
+ *
+ * `overCapacity` stays a plain boolean because every existing reader uses it.
+ * The MINUTES are what make it actionable: "over capacity" on every second day
+ * is noise, while "over by 8 minutes" and "over by two hours" are different
+ * problems with different answers.
+ *
+ * Absent rather than zero when the day fits, so nothing renders "over by 0".
+ */
+export function applyOverrun(plan: RouteDayPlan, workingMinutes: number): void {
+  const over = plan.totalTime - workingMinutes;
+  plan.overCapacity = over > 0;
+  plan.overrunMinutes = over > 0 ? Math.round(over) : undefined;
+}
+
 // ──────────────────────────────────────────────
 // Step 3b: Trim over-capacity days
 // ──────────────────────────────────────────────
@@ -614,7 +726,8 @@ async function rebalanceOverflow(
   unassigned: OverflowCandidate[],
   home: { lat: number; lng: number } | null,
   startTime: string,
-  workingMinutes: number
+  workingMinutes: number,
+  callsPerDay?: number
 ): Promise<{ storeId: string; storeName: string; reason: string }[]> {
   const stillUnassigned = [...unassigned];
   const fitted: number[] = [];
@@ -627,6 +740,9 @@ async function rebalanceOverflow(
     let bestRemaining = 0;
 
     for (const plan of dayPlans) {
+      // A day already at the target has no room, however much clock is left.
+      // Without this the refit pass would quietly undo the cap it just applied.
+      if (callsPerDay && callsPerDay > 0 && plan.stops.length >= callsPerDay) continue;
       const remaining = workingMinutes - plan.totalTime;
       if (remaining > bestRemaining) {
         bestRemaining = remaining;
@@ -677,7 +793,7 @@ async function rebalanceOverflow(
         bestDay.totalVisitTime += visitDuration;
         bestDay.totalTime += travelMin + visitDuration;
         bestDay.totalDistance += distanceKm;
-        bestDay.overCapacity = bestDay.totalTime > workingMinutes;
+        applyOverrun(bestDay, workingMinutes);
 
         fitted.push(i);
       }

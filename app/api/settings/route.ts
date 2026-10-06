@@ -42,6 +42,28 @@ export async function PUT(request: NextRequest) {
       }
     }
 
+    // Calls per day. `null` clears the target and returns day sizing to the
+    // clock; that is a real choice and has to be expressible, which is why it
+    // is not folded in with "undefined" (meaning the caller said nothing).
+    // It redraws every rep's week on the next run, so it needs the same
+    // permission as generating routes.
+    if (body.callsPerDay !== undefined) {
+      if (!session || !(await sessionHasPermission(session, "generate_routes"))) {
+        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      }
+      const previous = next.callsPerDay;
+      if (body.callsPerDay === null || body.callsPerDay === "") {
+        delete next.callsPerDay;
+        if (previous !== undefined) changes.push("calls per day back to no target");
+      } else {
+        const calls = Number(body.callsPerDay);
+        if (!isNaN(calls) && calls >= 1 && calls <= 30 && Math.round(calls) !== previous) {
+          next.callsPerDay = Math.round(calls);
+          changes.push(`calls per day set to ${next.callsPerDay}`);
+        }
+      }
+    }
+
     await saveSettings(next);
 
     if (changes.length) {
