@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { FilterDropdown } from "@/components/FilterDropdown";
 import { dayTotals } from "@/lib/dayTotals";
+import { roadRoutingOf } from "@/lib/roadRouting";
 import {
   Rep,
   Team,
@@ -360,6 +361,9 @@ export default function RoutesPage() {
     window.location.href = `/api/routes/export?${params.toString()}`;
   };
 
+  /** How much of the saved plan is a real drive rather than a straight line. */
+  const roadRouting = useMemo(() => roadRoutingOf(routes), [routes]);
+
   // Get current rep's plan
   const currentPlan: RepRoutePlan | null = useMemo(() => {
     if (!routes || !viewingRep) return routes?.repPlans?.[0] || null;
@@ -524,7 +528,27 @@ export default function RoutesPage() {
             {routes
               ? <>
                   Generated {new Date(routes.generatedAt).toLocaleString("en-ZA")}
-                  {routes.config.useGoogleMaps ? " (Google Maps optimized)" : " (Haversine fallback)"}
+                  {/* 🔴 NOT `config.useGoogleMaps` — that only records that a
+                      KEY existed, so on Clippa this line read "Google Maps
+                      optimized" over a book that was mostly straight lines,
+                      with every distance on them understated. Counted from the
+                      days themselves, so it is honest about an old plan too. */}
+                  {roadRouting ? (
+                    roadRouting.complete ? (
+                      <span className="ml-1 text-green-700">
+                        · real road routes, all {roadRouting.eligibleDays} days
+                      </span>
+                    ) : (
+                      <span className="ml-1 text-amber-700 font-medium">
+                        · ⚠ only {roadRouting.roadRoutedDays} of {roadRouting.eligibleDays} days
+                        have a real road route. {roadRouting.straightLineDays} are
+                        straight-line estimates, so their distances and drive times are
+                        understated. Regenerate to fix.
+                      </span>
+                    )
+                  ) : (
+                    " (no road routing recorded)"
+                  )}
                   {routes.callCycleTypeName && (
                     <span className="ml-2 inline-block bg-gray-100 text-gray-600 text-xs font-medium px-2 py-0.5 rounded">
                       {routes.callCycleTypeName}

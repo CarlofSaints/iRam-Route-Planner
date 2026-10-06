@@ -46,9 +46,12 @@ export async function getOptimizedRoute(
     waypointsParam +
     `&key=${API_KEY()}`;
 
-  // Rate limit: small delay between calls
-  await delay(80);
-
+  // 🔴 No sleep here any more. This used to `await delay(80)` before every
+  // call, which throttled the whole run to about three requests a second
+  // regardless of how many were in flight — a quarter of the generation's time
+  // budget spent deliberately doing nothing. Rate is now controlled by the
+  // caller's concurrency limit (see GOOGLE_CONCURRENCY), which bounds the real
+  // quantity Google cares about: requests per minute.
   const res = await fetch(url);
   if (!res.ok) return null;
 

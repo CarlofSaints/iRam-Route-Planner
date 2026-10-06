@@ -6,8 +6,19 @@ import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
 import { hasGoogleMapsKey } from "@/lib/google-maps";
 import { getSession, sessionHasPermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { countRoadRouting } from "@/lib/roadRouting";
 
-export const maxDuration = 120;
+/** Only the two counted facts are stored; the rest of the summary is derived. */
+const storedRoadRouting = (plans: RepRoutePlan[]) => {
+  const { eligibleDays, roadRoutedDays } = countRoadRouting(plans);
+  return { eligibleDays, roadRoutedDays };
+};
+
+// 300s, the Vercel Pro default ceiling (the plan maximum is 800). A generation
+// is almost entirely waiting on Google, and Fluid compute pauses active-CPU
+// billing during I/O, so the headroom is close to free. The old 120 was the
+// hard stop that truncated every bulk run.
+export const maxDuration = 300;
 
 export async function POST(request: NextRequest) {
   try {
@@ -68,11 +79,20 @@ export async function POST(request: NextRequest) {
     const startTime = body.startTime || "08:00";
     const repPlans: RepRoutePlan[] = [];
 
-    // Budget for Google Directions calls. Generating for a single rep gets the
-    // full budget (fast, all days road-optimised); a bulk all-reps run uses
-    // Google until the budget is spent, then falls back to Haversine so the
-    // request always completes well within the function timeout.
-    const googleDeadline = Date.now() + (reps.length === 1 ? 55_000 : 45_000);
+    /**
+     * Budget for Google Directions calls: now a SAFETY VALVE, not a cap.
+     *
+     * With the calls running six at a time a full book of several hundred
+     * days takes well under a minute, so this should never be reached. It
+     * stays because when the budget runs out the engine draws straight lines,
+     * and on Clippa that left most reps with understated distances for weeks.
+     * The plan now records how many days got a road route (roadRouting), and
+     * the Routes page says so, but a valve that never trips is still the point.
+     *
+     * 240s inside a 300s function leaves a minute to assemble and save the
+     * document even in the worst case.
+     */
+    const googleDeadline = Date.now() + 240_000;
 
     for (const rep of reps) {
       // Stores for this rep: their visit role decides whether that means the
@@ -122,6 +142,7 @@ export async function POST(request: NextRequest) {
         // rather than reading a setting that may have moved since.
         callsPerDay,
       },
+      roadRouting: storedRoadRouting(repPlans),
     };
 
     // A run for SOME reps must not replace the plan for all of them.
@@ -143,6 +164,11 @@ export async function POST(request: NextRequest) {
         // every week this run did not touch.
         doc.config.callsPerDay = existing.config?.callsPerDay;
         doc.generatedAt = existing.generatedAt;
+        // Recounted over the MERGED set. Counting only this run's reps would
+        // report "20 of 20 road-routed" on a document whose other weeks are
+        // straight lines: the reassuring version of the exact problem this
+        // field exists to expose.
+        doc.roadRouting = storedRoadRouting(doc.repPlans);
       }
     }
 

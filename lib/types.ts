@@ -639,6 +639,24 @@ export interface RoutePlanDocument {
      */
     callsPerDay?: number;
   };
+  /**
+   * How much of this plan is a REAL DRIVE rather than a straight line.
+   *
+   * 🔴 The fallback to straight-line distances is silent by design — the engine
+   * would rather produce a plan than fail — but silence is what let 29 of 37
+   * reps carry understated distances and flattering capacity for weeks. Nobody
+   * saw it until someone noticed dashed lines on a map. A plan now states this
+   * about itself so the next occurrence is visible the moment it happens.
+   *
+   * Absent on a plan generated before this existed, which is NOT the same as
+   * zero — a reader must say "not recorded", never "no days road-routed".
+   */
+  roadRouting?: {
+    /** Days that could have had a road route: they have stops and an anchor. */
+    eligibleDays: number;
+    /** Days that actually got one from Google. */
+    roadRoutedDays: number;
+  };
 }
 
 // ---------- Perigee Integration Types ----------

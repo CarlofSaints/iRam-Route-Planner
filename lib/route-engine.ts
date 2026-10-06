@@ -18,6 +18,49 @@ const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 const DEFAULT_WORKING_HOURS = 8.5;
 const DEFAULT_START_TIME = "08:00";
 
+/**
+ * How many Google Directions calls are in flight at once.
+ *
+ * Google's own ceiling is 3 000 requests a minute. At roughly 260 ms a call,
+ * six in flight is about 1 380 a minute — comfortably under, with room for the
+ * latency to be worse than measured. Raising this is the lever if generation
+ * ever gets slow again; it is not free above about 12, where the rate starts
+ * approaching Google's limit and a 429 would cost more than the wait saved.
+ *
+ * This replaced a fixed `delay(80)` before every call, which was rate limiting
+ * by sleeping: it throttled the whole run to three calls a second whether or
+ * not anything was in flight, and accounted for a quarter of the time budget.
+ */
+const GOOGLE_CONCURRENCY = 6;
+
+/**
+ * Run an async job over a list, at most `limit` at a time, results in order.
+ *
+ * Deliberately not `Promise.all` over everything: 705 simultaneous requests
+ * would trip Google's per-minute rate limit and bury the function in sockets.
+ * Deliberately not a library, either — this is fifteen lines and the engine has
+ * no runtime dependencies.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  job: (item: T, index: number) => Promise<R>
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    // Each worker takes the next index until the list is exhausted. `next++` is
+    // safe without a lock: JS is single-threaded between awaits, so no two
+    // workers can read the same index.
+    while (next < items.length) {
+      const i = next++;
+      results[i] = await job(items[i], i);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
 // ──────────────────────────────────────────────
 // Public API
 // ──────────────────────────────────────────────
@@ -70,6 +113,8 @@ export async function generateRepRoute(
   // Step 2: For each week, cluster stores into 5 day-groups
   const dayPlans: RouteDayPlan[] = [];
   const unassigned: OverflowCandidate[] = [];
+  /** Every day that has stores, gathered before any of them is optimised. */
+  const pending: { week: WeekLabel; dayIdx: number; dayStores: Store[] }[] = [];
 
   for (const week of WEEKS) {
     const weekStores = weekAssignments.get(week) || [];
@@ -108,17 +153,32 @@ export async function generateRepRoute(
     for (let dayIdx = 0; dayIdx < DAYS.length; dayIdx++) {
       const dayStores = clusters[dayIdx] || [];
       if (dayStores.length === 0) continue;
+      pending.push({ week, dayIdx, dayStores });
+    }
+  }
 
-      // Step 3: Optimize visit order
-      const plan = await buildDayPlan(
-        dayStores,
-        home,
-        week,
-        DAYS[dayIdx],
-        startTime,
-        workingMinutes,
-        googleDeadline
-      );
+  // Step 3: optimise every day's visit order.
+  //
+  // 🔴 Run CONCURRENTLY. Each day is one Google Directions round trip of about
+  // 260 ms, and there are 705 of them across the book — sequentially that is
+  // four minutes, against a 45-second budget inside a 120-second function. The
+  // budget always ran out, and when it did the engine fell back to straight
+  // lines SILENTLY: 29 of 37 reps carried "as the crow flies" distances, which
+  // understates their drive and makes their capacity look better than it is.
+  //
+  // The days are independent — clustering has already decided which store goes
+  // where — so the only thing sequencing bought was slowness. Results are
+  // collected in order, so the plan is byte-identical to the sequential one.
+  const builtPlans = await mapWithConcurrency(
+    pending,
+    GOOGLE_CONCURRENCY,
+    ({ week, dayIdx, dayStores }) =>
+      buildDayPlan(dayStores, home, week, DAYS[dayIdx], startTime, workingMinutes, googleDeadline)
+  );
+
+  {
+    for (let i = 0; i < pending.length; i++) {
+      const plan = builtPlans[i];
 
       // Step 3b: bring the day back within whichever cap is in force.
       //
@@ -365,8 +425,31 @@ function initializeCentroids(
   k: number
 ): { lat: number; lng: number }[] {
   const centroids: { lat: number; lng: number }[] = [];
-  // First centroid: random
-  const first = stores[Math.floor(Math.random() * stores.length)];
+
+  // 🔴 The first centroid was `stores[Math.floor(Math.random() * ...)]`, which
+  // made the WHOLE call cycle non-deterministic: regenerating with no data
+  // change at all reshuffled which store fell on which day, for every rep. A
+  // rep's week moved under them for no reason, the Perigee schedule shifted with
+  // it, and comparing two runs to see whether anything improved was impossible.
+  //
+  // Every other centroid is already chosen deterministically as "farthest from
+  // the ones picked so far". The seed now follows the same rule — the store
+  // farthest from the middle of the patch — which is the point k-means++ picks
+  // a random one to approximate anyway. Ties break on store id so the answer
+  // cannot depend on the order the list happened to arrive in.
+  const mid = {
+    lat: stores.reduce((s, g) => s + g.lat, 0) / stores.length,
+    lng: stores.reduce((s, g) => s + g.lng, 0) / stores.length,
+  };
+  let first = stores[0];
+  let firstDist = -1;
+  for (const s of stores) {
+    const d = haversineKm(mid.lat, mid.lng, s.lat, s.lng);
+    if (d > firstDist || (d === firstDist && s.store.id < first.store.id)) {
+      firstDist = d;
+      first = s;
+    }
+  }
   centroids.push({ lat: first.lat, lng: first.lng });
 
   // Subsequent centroids: farthest from existing
