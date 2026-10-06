@@ -17,6 +17,8 @@
  * BROKEN rather than merely far away.
  */
 
+import { parseLatLng } from "./latlng";
+
 /** Generous bounds around mainland South Africa. */
 export const SA_LAT = { min: -35.2, max: -21.9 };
 export const SA_LNG = { min: 16.2, max: 33.1 };
@@ -150,4 +152,23 @@ export function splitPastedPair(text: string): { lat: string; lng: string } | nu
 export function isForeignCoordinate(latText: string, lngText: string): boolean {
   const p = checkCoordinate(latText ?? "", lngText ?? "").problem;
   return p === "outside_sa" || p === "swapped";
+}
+
+/**
+ * A rep's home the route engine will anchor on, or null.
+ *
+ * The one rule for "has this rep got a home": a usable pair (lib/latlng.ts)
+ * that is also IN South Africa. A foreign home (swapped, or an address geocoded
+ * without a country) is treated exactly like a missing one: the engine falls
+ * back to the middle of the rep's stores, and every page that flags a missing
+ * home flags this one too. Anchoring a Gauteng rep's week on a point in the
+ * Arabian Sea is never the better guess.
+ */
+export function parseRepHome(
+  latText: string | undefined,
+  lngText: string | undefined
+): { lat: number; lng: number } | null {
+  const p = parseLatLng(latText, lngText);
+  if (!p) return null;
+  return isForeignCoordinate(latText ?? "", lngText ?? "") ? null : p;
 }

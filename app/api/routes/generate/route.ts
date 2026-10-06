@@ -9,6 +9,8 @@ import { getSession } from "@/lib/auth";
 import { canChangeRoutes } from "@/lib/routeAccess";
 import { logActivity } from "@/lib/activityLog";
 import { countRoadRouting } from "@/lib/roadRouting";
+import { mergeBaseForPartialRun } from "@/lib/partialRun";
+import { parseRepHome } from "@/lib/saCoordinates";
 
 /** Only the two counted facts are stored; the rest of the summary is derived. */
 const storedRoadRouting = (plans: RepRoutePlan[]) => {
@@ -87,6 +89,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // A run for SOME reps merges into a saved plan, decided BEFORE any Google
+    // call is spent. With nothing safe to merge into it is refused, never
+    // saved as a subset-only book (lib/partialRun.ts).
+    const isPartial = !!(repCodes && repCodes.length > 0);
+    let mergeBase: RoutePlanDocument | null = null;
+    if (isPartial) {
+      const [perType, snapshot] = await Promise.all([
+        activeType ? getRoutesForType(activeType.id) : Promise.resolve(null),
+        getRoutes(),
+      ]);
+      const pick = mergeBaseForPartialRun(activeType?.id, perType, snapshot);
+      if ("refusal" in pick) {
+        return NextResponse.json({ error: pick.refusal }, { status: 409 });
+      }
+      mergeBase = pick.base;
+    }
+
     const startTime = body.startTime || "08:00";
     const repPlans: RepRoutePlan[] = [];
 
@@ -116,7 +135,7 @@ export async function POST(request: NextRequest) {
           repName: rep.name,
           visitRoleId: role.id,
           visitRoleName: role.name,
-          homeLatLng: parseHome(rep),
+          homeLatLng: parseRepHome(rep.homeGpsLat, rep.homeGpsLng),
           workingHoursPerDay: rep.workingHoursPerDay ?? 8.5,
           // A rep with no stores still carries the target, so the Map dropdown
           // does not show a blank beside them and read as "not set".
@@ -162,25 +181,23 @@ export async function POST(request: NextRequest) {
     // one rep. Saving it as-is would delete every other rep's week, and the
     // only sign would be an almost-empty Routes page. So a partial run merges
     // its reps into the plan already saved, and only a full run replaces it.
-    if (repCodes && repCodes.length > 0) {
-      const existing = activeType ? await getRoutesForType(activeType.id) : await getRoutes();
-      if (existing) {
-        const touched = new Set(repPlans.map((p) => p.repCode));
-        doc.repPlans = [
-          ...existing.repPlans.filter((p) => !touched.has(p.repCode)),
-          ...repPlans,
-        ];
-        // The document still describes the plan as a whole, and most of it was
-        // built with the OLD target. Claiming the new one would misdescribe
-        // every week this run did not touch.
-        doc.config.callsPerDay = existing.config?.callsPerDay;
-        doc.generatedAt = existing.generatedAt;
-        // Recounted over the MERGED set. Counting only this run's reps would
-        // report "20 of 20 road-routed" on a document whose other weeks are
-        // straight lines: the reassuring version of the exact problem this
-        // field exists to expose.
-        doc.roadRouting = storedRoadRouting(doc.repPlans);
-      }
+    if (isPartial && mergeBase) {
+      const existing = mergeBase;
+      const touched = new Set(repPlans.map((p) => p.repCode));
+      doc.repPlans = [
+        ...existing.repPlans.filter((p) => !touched.has(p.repCode)),
+        ...repPlans,
+      ];
+      // The document still describes the plan as a whole, and most of it was
+      // built with the OLD target. Claiming the new one would misdescribe
+      // every week this run did not touch.
+      doc.config.callsPerDay = existing.config?.callsPerDay;
+      doc.generatedAt = existing.generatedAt;
+      // Recounted over the MERGED set. Counting only this run's reps would
+      // report "20 of 20 road-routed" on a document whose other weeks are
+      // straight lines: the reassuring version of the exact problem this
+      // field exists to expose.
+      doc.roadRouting = storedRoadRouting(doc.repPlans);
     }
 
     // Save per-type (if active type exists) + latest snapshot
@@ -223,8 +240,3 @@ function clampCallsPerDay(raw: unknown): number | undefined {
   return Math.min(Math.round(n), 30);
 }
 
-function parseHome(rep: { homeGpsLat: string; homeGpsLng: string }) {
-  const lat = parseFloat(rep.homeGpsLat);
-  const lng = parseFloat(rep.homeGpsLng);
-  return !isNaN(lat) && !isNaN(lng) ? { lat, lng } : null;
-}

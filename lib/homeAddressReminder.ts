@@ -14,14 +14,14 @@
  * the rep's day still starts from the centroid while the Reps page shows an
  * address sitting in the field (25 reps were in exactly that state). Chasing the
  * address alone would mark those reps done while nothing about their route had
- * changed. The gate is the same `parseLatLng` the route engine itself calls, so
+ * changed. The gate is the same `parseRepHome` the route engine itself calls, so
  * the two can never disagree.
  *
  * Nothing here sends anything or touches storage. It decides WHO and writes the
  * words; the route decides whether today is a day for sending them.
  */
 
-import { parseLatLng } from "./route-engine";
+import { parseRepHome } from "./saCoordinates";
 import { BRAND, escapeHtml, resolveAppUrl } from "./welcomeEmail";
 import { normaliseEmail } from "./manager";
 import type { Rep, ReminderBlockReason, ReminderStateMap, Store, Team, User } from "./types";
@@ -153,7 +153,7 @@ export interface ClassifyInput {
  * the centroid there.
  */
 export function hasRoutableHome(rep: Rep): boolean {
-  return parseLatLng(rep.homeGpsLat, rep.homeGpsLng) !== null;
+  return parseRepHome(rep.homeGpsLat, rep.homeGpsLng) !== null;
 }
 
 /** The same shape the Reps page uses, so both agree on an unusable address. */

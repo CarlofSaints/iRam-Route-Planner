@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getRoutes, getStores, getVisitRoles } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import { resolveOwnRep } from "@/lib/ownRep";
-import { parseLatLng } from "@/lib/route-engine";
+import { parseRepHome } from "@/lib/saCoordinates";
 import { getRoleForRep } from "@/lib/repStores";
 import { plansForRep, shapePlan, storesForRepAnyRole } from "@/lib/myRoute";
 
@@ -35,7 +35,7 @@ export async function GET() {
 
     // The home the rep has NOW, which can differ from the one the plan was
     // built on. The page says so rather than quietly drawing the old anchor.
-    const currentHome = parseLatLng(rep.homeGpsLat, rep.homeGpsLng);
+    const currentHome = parseRepHome(rep.homeGpsLat, rep.homeGpsLng);
 
     return NextResponse.json(
       {

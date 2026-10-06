@@ -18,6 +18,9 @@ import { generateRepRoute } from "../lib/route-engine";
 import { countRoadRouting, roadRoutingOf } from "../lib/roadRouting";
 import type { Rep, RepRoutePlan, RoutePlanDocument, Store } from "../lib/types";
 
+// Never call Google from a check, whatever the shell has loaded.
+delete process.env.GOOGLE_MAPS_API_KEY;
+
 let passed = 0;
 let failed = 0;
 
@@ -175,6 +178,76 @@ async function main() {
     countRoadRouting([allRoad, a]).eligibleDays === a.days.length * 2 &&
       countRoadRouting([allRoad, a]).roadRoutedDays === a.days.length
   );
+
+  // ── 4. A fake Google, so the road-routed paths run without the network ──
+  // The key below is not a key; `fetch` is replaced, so nothing leaves the
+  // machine. Restored afterwards so nothing else in this run sees it.
+  const realFetch = globalThis.fetch;
+  const realKey = process.env.GOOGLE_MAPS_API_KEY;
+  process.env.GOOGLE_MAPS_API_KEY = "check-script-fake-key";
+  let sawSignal = 0;
+  let calls = 0;
+  /** Answers like Directions: identity order, 2 km legs, a polyline. */
+  const fakeGoogle = (async (input: string | URL | Request, init?: RequestInit) => {
+    calls++;
+    if (init?.signal) sawSignal++;
+    const url = new URL(String(input));
+    const wp = (url.searchParams.get("waypoints") ?? "").split("|").slice(1);
+    const legs = Array.from({ length: wp.length + 1 }, () => ({
+      distance: { value: 2000 }, duration: { value: 300 },
+    }));
+    return new Response(JSON.stringify({
+      status: "OK",
+      routes: [{ waypoint_order: wp.map((_, i) => i), legs, overview_polyline: { points: "fakePolyline" } }],
+    }), { status: 200 });
+  }) as typeof fetch;
+
+  try {
+    globalThis.fetch = fakeGoogle;
+
+    // No target, small days: nothing trimmed, so Google's line stays.
+    const small = Array.from({ length: 10 }, (_, i) => store(`k${i}`, -26.0 - i * 0.01, 28.0));
+    const kept = await generateRepRoute(rep(), small, "08:00");
+    ok("an untouched day keeps Google's road line", kept.days.length > 0 && kept.days.every((d) => !!d.polyline));
+    ok("the Directions call carries a timeout signal", calls > 0 && sawSignal === calls, `${sawSignal}/${calls}`);
+
+    // 🔴 Target 3 against ~8 a day: every day is trimmed, and a line drawn
+    // through the dropped stops must not survive, or be counted as a drive.
+    const trimmed = await generateRepRoute(rep(), stores, "08:00", undefined, undefined, 3);
+    const stale = trimmed.days.filter((d) => d.polyline);
+    ok("a day trimmed to the target loses the stale road line", stale.length === 0, `${stale.length} days still carry one`);
+    ok("and is not counted as road-routed", countRoadRouting([trimmed]).roadRoutedDays === 0);
+
+    // Over the clock with no target: the time-based trim, same rule.
+    const long = Array.from({ length: 40 }, (_, i) => ({ ...store(`l${i}`, -26.0 - (i % 8) * 0.05, 28.0 + Math.floor(i / 8) * 0.06), duration: 90 }));
+    const overClock = await generateRepRoute(rep(), long, "08:00");
+    const shortened = overClock.days.filter((d) => d.stops.length < 8 && d.polyline);
+    ok("a day trimmed to the clock loses the stale road line", overClock.stats.unassignedStores.length > 0 && shortened.length === 0,
+      `${overClock.stats.unassignedStores.length} trimmed, ${shortened.length} stale`);
+
+    // 🔴 A network error on one call used to reject the whole Generate.
+    globalThis.fetch = (async () => { throw new TypeError("fetch failed"); }) as typeof fetch;
+    let threw = false;
+    let failedPlan: RepRoutePlan | null = null;
+    try {
+      failedPlan = await generateRepRoute(rep(), small, "08:00");
+    } catch {
+      threw = true;
+    }
+    ok("a network error does not fail the generation", !threw);
+    ok("the day falls back to a straight line, not counted as a drive",
+      !!failedPlan && failedPlan.days.length > 0 && countRoadRouting([failedPlan]).roadRoutedDays === 0);
+
+    // A timeout aborts the fetch, which rejects; same answer.
+    globalThis.fetch = (async () => { throw new DOMException("timed out", "TimeoutError"); }) as typeof fetch;
+    threw = false;
+    try { await generateRepRoute(rep(), small, "08:00"); } catch { threw = true; }
+    ok("a timed-out call does not fail the generation", !threw);
+  } finally {
+    globalThis.fetch = realFetch;
+    if (realKey === undefined) delete process.env.GOOGLE_MAPS_API_KEY;
+    else process.env.GOOGLE_MAPS_API_KEY = realKey;
+  }
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed > 0) process.exit(1);

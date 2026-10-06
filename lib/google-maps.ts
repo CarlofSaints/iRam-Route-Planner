@@ -16,6 +16,13 @@ export interface OptimizedRouteResult {
 
 const API_KEY = () => process.env.GOOGLE_MAPS_API_KEY || "";
 
+/**
+ * How long one Directions call may take before it is abandoned. A hung request
+ * used to wait for ever, so the generation's 240s Google budget (checked only
+ * BEFORE each call) could not stop it.
+ */
+export const DIRECTIONS_TIMEOUT_MS = 10_000;
+
 export function hasGoogleMapsKey(): boolean {
   return !!process.env.GOOGLE_MAPS_API_KEY;
 }
@@ -52,19 +59,37 @@ export async function getOptimizedRoute(
   // budget spent deliberately doing nothing. Rate is now controlled by the
   // caller's concurrency limit (see GOOGLE_CONCURRENCY), which bounds the real
   // quantity Google cares about: requests per minute.
-  const res = await fetch(url);
-  if (!res.ok) return null;
-
-  const data = await res.json();
+  //
+  // 🔴 Any failure is a null, never a throw. A single network error used to
+  // reject the whole Generate (a 500, nothing saved) when the day could simply
+  // have fallen back to a straight line, which is then counted as NOT
+  // road-routed, so the page still says so.
+  let data: {
+    status?: string;
+    routes?: {
+      legs: { distance: { value: number }; duration: { value: number } }[];
+      waypoint_order?: number[];
+      overview_polyline?: { points?: string };
+    }[];
+  };
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(DIRECTIONS_TIMEOUT_MS) });
+    if (!res.ok) return null;
+    data = await res.json();
+  } catch {
+    return null;
+  }
   if (data.status !== "OK" || !data.routes?.length) return null;
 
   const route = data.routes[0];
-  const legs: DirectionsLeg[] = route.legs.map(
-    (leg: { distance: { value: number }; duration: { value: number } }) => ({
-      distanceMeters: leg.distance.value,
-      durationSeconds: leg.duration.value,
-    })
-  );
+  // A malformed leg is a failed call, not a zero-kilometre drive.
+  if (!Array.isArray(route.legs) || route.legs.some((l) => typeof l?.distance?.value !== "number" || typeof l?.duration?.value !== "number")) {
+    return null;
+  }
+  const legs: DirectionsLeg[] = route.legs.map((leg) => ({
+    distanceMeters: leg.distance.value,
+    durationSeconds: leg.duration.value,
+  }));
 
   return {
     waypointOrder: route.waypoint_order || [],

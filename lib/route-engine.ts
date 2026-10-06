@@ -12,7 +12,7 @@ import {
 import { getOptimizedRoute, hasGoogleMapsKey } from "./google-maps";
 import { parseLatLng, haversineKm, DEFAULT_SPEED_KMH, driveMinutes } from "./latlng";
 import { parseClock, formatClock } from "./clock";
-import { isForeignCoordinate } from "./saCoordinates";
+import { isForeignCoordinate, parseRepHome } from "./saCoordinates";
 
 /**
  * Why a store with a coordinate outside South Africa was not routed. Says "GPS"
@@ -120,7 +120,12 @@ export async function generateRepRoute(
   // If the rep has no valid home GPS loaded, default the start/end point to the
   // centroid of their routable stores so routes still generate (and Google
   // optimisation still runs) from a sensible anchor in the middle of their patch.
-  const home = parseLatLng(rep.homeGpsLat, rep.homeGpsLng) ?? storeCentroid(routable);
+  //
+  // A home OUTSIDE South Africa counts as no home at all. A swapped pair or a
+  // name geocoded without a country would otherwise anchor every day on a
+  // point thousands of kilometres from the patch; the centroid is a far better
+  // guess, and the pages flag it the same way they flag a missing home.
+  const home = parseRepHome(rep.homeGpsLat, rep.homeGpsLng) ?? storeCentroid(routable);
   const workingMinutes = (rep.workingHoursPerDay ?? DEFAULT_WORKING_HOURS) * 60;
 
   // Step 1: Distribute stores across weeks based on frequency
@@ -215,6 +220,7 @@ export async function generateRepRoute(
         unassigned.push({
           storeId: r.storeId,
           storeName: r.storeName,
+          week: plan.week,
           reason: callsPerDay && callsPerDay > 0
             ? `Over the ${callsPerDay} calls per day target`
             : "Over daily capacity",
@@ -354,7 +360,7 @@ export interface GeoStore {
   lng: number;
 }
 
-function clusterIntoDays(
+export function clusterIntoDays(
   stores: Store[],
   home: { lat: number; lng: number } | null,
   opts: { callsPerDay?: number; pinnedPerDay?: number[] } = {}
@@ -417,29 +423,47 @@ function clusterIntoDays(
     }
   }
 
-  // Balance cluster sizes (target ±2 stores)
   const clusters: GeoStore[][] = Array.from({ length: K }, () => []);
   geoStores.forEach((g, i) => clusters[assignments[i]].push(g));
-  balanceClusters(clusters, centroids, opts);
 
-  // Sort clusters by angle from home (or centroid center) for geographic ordering
+  // Which DAY each cluster becomes: sorted by angle from home (or the middle of
+  // the patch) for geographic ordering.
+  //
+  // 🔴 Decided BEFORE balancing. `pinnedPerDay` is indexed by DAY (Monday = 0),
+  // but the balancer works on clusters, and cluster 0 is not Monday until this
+  // sort says so. Balancing first reserved Monday's pinned room on whichever
+  // cluster happened to be number 0, so the room landed on the wrong day, that
+  // day ran over the target, and the trim and refit that followed put a weekly
+  // store on two days of one week and none of another. The centroids do not
+  // move while balancing, so the order is the same either side of it.
   const refPoint = home || {
     lat: geoStores.reduce((s, g) => s + g.lat, 0) / geoStores.length,
     lng: geoStores.reduce((s, g) => s + g.lng, 0) / geoStores.length,
   };
+  const dayOrder = clusterDayOrder(centroids, refPoint);
 
-  const sorted = clusters
-    .map((cluster, idx) => ({
-      cluster,
-      angle: Math.atan2(
-        centroids[idx].lat - refPoint.lat,
-        centroids[idx].lng - refPoint.lng
-      ),
-    }))
+  // Each cluster's pinned count is the pinned count of the day it will become.
+  const pinnedPerCluster = new Array<number>(K).fill(0);
+  dayOrder.forEach((clusterIdx, dayIdx) => {
+    pinnedPerCluster[clusterIdx] = opts.pinnedPerDay?.[dayIdx] ?? 0;
+  });
+  balanceClusters(clusters, centroids, { ...opts, pinnedPerDay: pinnedPerCluster });
+
+  return dayOrder.map((clusterIdx) => clusters[clusterIdx].map((g) => g.store));
+}
+
+/**
+ * Cluster indexes in day order (Monday first), by the angle of each centroid
+ * from the reference point.
+ */
+function clusterDayOrder(
+  centroids: { lat: number; lng: number }[],
+  refPoint: { lat: number; lng: number }
+): number[] {
+  return centroids
+    .map((c, idx) => ({ idx, angle: Math.atan2(c.lat - refPoint.lat, c.lng - refPoint.lng) }))
     .sort((a, b) => a.angle - b.angle)
-    .map((c) => c.cluster.map((g) => g.store));
-
-  return sorted;
+    .map((c) => c.idx);
 }
 
 function initializeCentroids(
@@ -819,8 +843,10 @@ function trimToCount(
   }
   // Re-measured, not adjusted: dropping the last three calls changes where the
   // rep drives home FROM.
-  if (removed.length > 0) applyReturnLeg(plan, home, workingMinutes);
-  else applyOverrun(plan, workingMinutes);
+  if (removed.length > 0) {
+    dropRoadGeometry(plan);
+    applyReturnLeg(plan, home, workingMinutes);
+  } else applyOverrun(plan, workingMinutes);
   return removed;
 }
 
@@ -840,6 +866,19 @@ export function applyOverrun(plan: RouteDayPlan, workingMinutes: number): void {
   plan.overrunMinutes = over > 0 ? Math.round(over) : undefined;
 }
 
+/**
+ * Forget Google's road line once the stop list has changed under it.
+ *
+ * 🔴 The polyline was drawn through the stops Google was GIVEN. After a trim
+ * or a refit it still runs through a dropped shop (or misses an added one), so
+ * the map drew a solid road through calls the rep no longer makes, and
+ * countRoadRouting counted the day as a real drive. Without it the day is
+ * honestly a straight-line estimate.
+ */
+function dropRoadGeometry(plan: RouteDayPlan): void {
+  delete plan.polyline;
+}
+
 // ──────────────────────────────────────────────
 // Step 3b: Trim over-capacity days
 // ──────────────────────────────────────────────
@@ -852,6 +891,7 @@ function trimToCapacity(
   const removed: RouteStop[] = [];
   while (plan.totalTime > workingMinutes && plan.stops.length > 1) {
     removed.push(plan.stops.pop()!);
+    dropRoadGeometry(plan);
     // Inside the loop, because the new leg home is part of what decides
     // whether the day now fits: a shorter route ending 40 km out may not.
     applyReturnLeg(plan, home, workingMinutes);
@@ -873,6 +913,8 @@ type OverflowCandidate = {
   storeId: string;
   storeName: string;
   reason: string;
+  /** The week it was trimmed from. A refit may only put it back in THIS week. */
+  week?: WeekLabel;
   stop?: RouteStop;
 };
 
@@ -895,6 +937,13 @@ async function rebalanceOverflow(
     let bestRemaining = 0;
 
     for (const plan of dayPlans) {
+      // 🔴 Only the week the store was trimmed from, and never a day that
+      // already holds it. Refitting onto "any day with room" put a weekly
+      // store on two days of one week and none of another, or a 2x/week store
+      // twice on one day, and reported nothing unassigned. When no such day
+      // has room the store stays unassigned: reported, not misplaced.
+      if (store.week && plan.week !== store.week) continue;
+      if (plan.stops.some((s) => s.storeId === store.storeId)) continue;
       // A day already at the target has no room, however much clock is left.
       // Without this the refit pass would quietly undo the cap it just applied.
       if (callsPerDay && callsPerDay > 0 && plan.stops.length >= callsPerDay) continue;
@@ -959,7 +1008,9 @@ async function rebalanceOverflow(
         });
 
         // The day ends somewhere new now, so the leg home is re-measured and
-        // every total rebuilt around it.
+        // every total rebuilt around it. Google's line never visited this
+        // stop, so it goes too.
+        dropRoadGeometry(bestDay);
         applyReturnLeg(bestDay, home, workingMinutes);
 
         fitted.push(i);

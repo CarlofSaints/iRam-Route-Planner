@@ -8,6 +8,7 @@ import {
   PRIMARY_VISIT_ROLE_ID,
   DEFAULT_VISIT_ROLES,
 } from "./types";
+import { parseLatLng } from "./latlng";
 
 /**
  * What rhythm a given role calls on a given channel at.
@@ -187,4 +188,26 @@ export function getStoresForRep(
 
   // Geography / default: the rep calls on every store allocated to them.
   return allocated;
+}
+
+/**
+ * The stores a rep works, in their own visit role, that have a usable
+ * coordinate. The Routes page's pin picker opens on these.
+ *
+ * 🔴 The page matched `store.repCode` only, which is the PRIMARY role's slot.
+ * A QC or team-leader rep is on `roleReps` (or the old repCode2/3), so their
+ * picker opened on nothing and centred on the middle of the country.
+ */
+export function workedStorePoints(
+  stores: Store[],
+  rep: Rep,
+  role: VisitRole
+): { lat: number; lng: number; name: string }[] {
+  const out: { lat: number; lng: number; name: string }[] = [];
+  for (const s of stores) {
+    if (!storeHasRepInRole(s, rep, role)) continue;
+    const p = parseLatLng(s.gpsLat, s.gpsLng);
+    if (p) out.push({ ...p, name: s.name });
+  }
+  return out;
 }

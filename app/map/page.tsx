@@ -6,7 +6,8 @@ import dynamic from "next/dynamic";
 import { useSession } from "@/components/SessionProvider";
 import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, CallCycleStrategy, VisitRole, getVisitRoleName } from "@/lib/types";
 import { decodePolyline } from "@/lib/google-maps";
-import { parseLatLng, haversineKm } from "@/lib/latlng";
+import { haversineKm } from "@/lib/latlng";
+import { parseRepHome } from "@/lib/saCoordinates";
 import type { RouteLine } from "./MapView";
 import { isTeamRole } from "@/lib/roles";
 
@@ -355,7 +356,7 @@ function MapPageInner() {
   /**
    * Which reps start their day at a real home address.
    *
-   * Uses the route engine's own parseLatLng, never a bare parseFloat, so this
+   * Uses the route engine's own rule (parseRepHome), never a bare parseFloat, so this
    * badge can never claim a home the engine refuses to route from — (0,0) and
    * an out-of-range fix are exactly the values that differ.
    */
@@ -363,7 +364,7 @@ function MapPageInner() {
     const anchors = new Map((routes?.repPlans ?? []).map((p) => [p.repCode, p.homeLatLng]));
     const out: Record<string, "home" | "centroid" | "stale"> = {};
     for (const r of scopedReps) {
-      const home = parseLatLng(r.homeGpsLat, r.homeGpsLng);
+      const home = parseRepHome(r.homeGpsLat, r.homeGpsLng);
       if (!home) {
         out[r.code] = "centroid";
         continue;
@@ -447,7 +448,7 @@ function MapPageInner() {
     const home = (() => {
       const rep = repMap.get(filterRep);
       if (!rep) return null;
-      const fix = parseLatLng(rep.homeGpsLat, rep.homeGpsLng);
+      const fix = parseRepHome(rep.homeGpsLat, rep.homeGpsLng);
       return fix ? ([fix.lat, fix.lng] as [number, number]) : null;
     })();
     return matchingDayPlans.map((dp) => {
@@ -481,7 +482,7 @@ function MapPageInner() {
     // The engine's own check, so the pin and the route always agree about
     // whether this rep has a home: a bare parseFloat accepts (0,0) and a
     // lat/lng outside South Africa, both of which the engine rejects.
-    const home = parseLatLng(rep.homeGpsLat, rep.homeGpsLng);
+    const home = parseRepHome(rep.homeGpsLat, rep.homeGpsLng);
     const planned = routes?.repPlans.find((p) => p.repCode === filterRep)?.homeLatLng;
 
     if (home) {

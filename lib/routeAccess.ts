@@ -49,3 +49,24 @@ export function scopeRouteDoc(
   if (!doc || allowed === null) return doc;
   return { ...doc, repPlans: doc.repPlans.filter((p) => allowed.has(p.repCode)) };
 }
+
+/**
+ * Settings that redraw the route book, so only someone who may change routes
+ * may change them.
+ *
+ * 🔴 The settings route only asked `refuseEdit("settings")`, which a team
+ * manager passes, so a manager could move the outlier radius (which decides
+ * which stores are held out of EVERY rep's routing) and, with the grid's
+ * generate_routes ticked, the business-wide calls-per-day. Both are the same
+ * decision as generating routes, so they take the same admin rule.
+ */
+export const ROUTE_SETTINGS = ["outlierRadiusKm", "callsPerDay"] as const;
+
+/** The route-shaping settings this body tries to change, if the caller may not. */
+export function refusedRouteSettings(
+  session: Pick<SessionPayload, "role"> | null,
+  body: Record<string, unknown> | null | undefined
+): string[] {
+  if (session && canChangeRoutes(session)) return [];
+  return ROUTE_SETTINGS.filter((k) => body?.[k] !== undefined);
+}

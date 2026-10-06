@@ -12,7 +12,7 @@
  *
  * Run: npx tsx scripts/check-store-role-reps.ts
  */
-import { storeRepForRole, storeHasRepInRole, getStoresForRep } from "../lib/repStores";
+import { storeRepForRole, storeHasRepInRole, getStoresForRep, workedStorePoints } from "../lib/repStores";
 import { Rep, Store, VisitRole, Channel, storeRoleColumns } from "../lib/types";
 
 let passed = 0;
@@ -128,6 +128,29 @@ check("one person listed under two roles matches both slots", [
   storeHasRepInRole(doubled, rep("L1", "training"), LEADER),
   storeHasRepInRole(doubled, rep("L1", "training"), RVL),
 ], [true, true]);
+
+// ---- the Routes page pin picker opens on the stores the rep WORKS ----
+// 🔴 It matched store.repCode only, so a QC or team-leader rep's picker had
+// nothing to centre on.
+{
+  const stores = [
+    store("mine-primary", { repCode: "P1" }),
+    store("led-new", { repCode: "P1", roleReps: { training: "L1" } }),
+    store("led-old", { repCode: "P1", repCode2: "L1" }),
+    store("led-no-gps", { repCode: "P1", roleReps: { training: "L1" }, gpsLat: "", gpsLng: "" }),
+    store("someone-else", { repCode: "P2", roleReps: { training: "L2" } }),
+  ];
+  check(
+    "a team leader's picker gets their roleReps and old-slot stores",
+    workedStorePoints(stores, rep("L1", "training"), LEADER).map((p) => p.name),
+    ["led-new", "led-old"]
+  );
+  check(
+    "a primary rep's picker gets their own stores only",
+    workedStorePoints(stores, rep("P1"), SALES).map((p) => p.name),
+    ["mine-primary", "led-new", "led-old"]
+  );
+}
 
 console.log(`\n${passed} passed, ${failed} failed`);
 if (failed > 0) process.exit(1);

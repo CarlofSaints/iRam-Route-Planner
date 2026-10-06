@@ -9,7 +9,8 @@
  * also has a blank one.
  */
 
-import { canChangeRoutes, scopeRouteDoc, visibleRepCodes } from "../lib/routeAccess";
+import { canChangeRoutes, refusedRouteSettings, scopeRouteDoc, visibleRepCodes } from "../lib/routeAccess";
+import { mergeBaseForPartialRun, PARTIAL_RUN_REFUSAL } from "../lib/partialRun";
 import { guessCycleDay } from "../lib/cycleWeek";
 import { canEdit, editRefusal, isTeamRole, type EditArea } from "../lib/roles";
 import { ROLE_DEFINITIONS, ALL_PERMISSIONS, type RoutePlanDocument } from "../lib/types";
@@ -105,6 +106,43 @@ ok("Team Admin is in the role defaults, so the backfill adds it", !!teamAdminDef
 ok("every Team Admin permission is a real key", !!teamAdminDef?.permissions.every((k) => ALL_PERMISSIONS.some((p) => p.key === k)));
 ok("Team Admin cannot generate routes through the grid either", !teamAdminDef?.permissions.includes("generate_routes"));
 ok("Team Admin cannot manage users", !teamAdminDef?.permissions.includes("manage_users"));
+
+// ── Settings that redraw the route book are admin-only ──
+// 🔴 A team manager passes refuseEdit("settings"), and that was the only gate
+// on the out-of-range radius.
+for (const role of ["teamManager", "teamAdmin", "viewer", "rep", "somethingNew"]) {
+  ok(`${role} may not move the outlier radius`, refusedRouteSettings({ role } as never, { outlierRadiusKm: 80 }).length === 1);
+  ok(`${role} may not move calls per day`, refusedRouteSettings({ role } as never, { callsPerDay: 8 }).length === 1);
+  ok(`${role} may still send other settings`, refusedRouteSettings({ role } as never, { homeAddressRemindersEnabled: true }).length === 0);
+}
+ok("no session may not move the radius", refusedRouteSettings(null, { outlierRadiusKm: 80 }).length === 1);
+ok("clearing calls per day (null) still counts as changing it", refusedRouteSettings({ role: "teamManager" } as never, { callsPerDay: null }).length === 1);
+for (const role of ["admin", "superAdmin"]) {
+  ok(`${role} may change both`, refusedRouteSettings({ role } as never, { outlierRadiusKm: 80, callsPerDay: 8 }).length === 0);
+}
+
+// ── A partial run never saves a subset-only book ──
+// 🔴 With no per-type file, a subset run wrote just the ticked reps over the
+// per-type file AND the `routes` snapshot, deleting every other rep's week.
+{
+  const plan = (code: string) => ({ repCode: code }) as RoutePlanDocument["repPlans"][number];
+  const book = (typeId: string | undefined, codes: string[]) =>
+    ({ ...doc, callCycleTypeId: typeId, repPlans: codes.map(plan) }) as RoutePlanDocument;
+  const snapshotUntyped = book(undefined, ["A1", "A2", "B1"]);
+  const snapshotTypeX = book("x", ["A1", "A2", "B1"]);
+  const perTypeX = book("x", ["A1"]);
+
+  const base = (r: ReturnType<typeof mergeBaseForPartialRun>) => ("base" in r ? r.base : null);
+  ok("the per-type file wins when it exists", base(mergeBaseForPartialRun("x", perTypeX, snapshotUntyped)) === perTypeX);
+  ok("no per-type file: the untyped snapshot is the base (live today)", base(mergeBaseForPartialRun("x", null, snapshotUntyped)) === snapshotUntyped);
+  ok("no per-type file: a snapshot of the SAME type is the base", base(mergeBaseForPartialRun("x", null, snapshotTypeX)) === snapshotTypeX);
+  ok("no per-type file and a snapshot of ANOTHER type: refused", "refusal" in mergeBaseForPartialRun("y", null, snapshotTypeX));
+  ok("nothing saved anywhere: refused", "refusal" in mergeBaseForPartialRun("x", null, null));
+  ok("the refusal says what to do", /generate everyone first/i.test(PARTIAL_RUN_REFUSAL));
+  ok("no active type: the untyped snapshot is the base", base(mergeBaseForPartialRun(undefined, null, snapshotUntyped)) === snapshotUntyped);
+  ok("no active type and a typed snapshot: refused, not relabelled", "refusal" in mergeBaseForPartialRun(undefined, null, snapshotTypeX));
+  ok("no active type and nothing saved: refused", "refusal" in mergeBaseForPartialRun(undefined, null, null));
+}
 
 // ── Week guess ── (month is 0-based in new Date)
 const g = (y: number, m: number, d: number) => guessCycleDay(new Date(y, m - 1, d));

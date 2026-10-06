@@ -11,7 +11,11 @@
  * Run: npx tsx scripts/check-foreign-coordinates.ts
  * (Without .env.local, so no Google call is ever made.)
  */
-import { checkCoordinate, isForeignCoordinate, splitPastedPair } from "../lib/saCoordinates";
+import { checkCoordinate, isForeignCoordinate, parseRepHome, splitPastedPair } from "../lib/saCoordinates";
+import { hasRoutableHome } from "../lib/homeAddressReminder";
+
+// Never call Google from a check, whatever the shell has loaded.
+delete process.env.GOOGLE_MAPS_API_KEY;
 import { generateRepRoute, FOREIGN_GPS_REASON } from "../lib/route-engine";
 import { computeOutliers } from "../lib/outliers";
 import { Store, Rep, VisitRole } from "../lib/types";
@@ -82,6 +86,28 @@ const store = (id: string, lat: string, lng: string, extra: Partial<Store> = {})
     check("confirming it does not make it routable", routed.has("confirmed"), false);
     check("a blank store keeps its own reason", reasonOf.get("blank"), "Missing or invalid GPS coordinates");
     check("the reason mentions GPS, so the Routes page offers the fix boxes", /gps/i.test(FOREIGN_GPS_REASON), true);
+  }
+
+  console.log("\nA rep's home outside South Africa\n");
+  {
+    // 🔴 A swapped or wrongly geocoded HOME was used as the day anchor, so
+    // every day started and ended thousands of kilometres from the patch.
+    const stores = Array.from({ length: 6 }, (_, i) => store(`h${i}`, String(-26.1 - i * 0.01), "28.05"));
+    const foreignHome: Rep = { ...rep, homeGpsLat: "37.788982", homeGpsLng: "-122.398301" };
+    const swappedHome: Rep = { ...rep, homeGpsLat: "28.05", homeGpsLng: "-26.10" };
+    const blankHome: Rep = { ...rep, homeGpsLat: "", homeGpsLng: "" };
+
+    check("a foreign home is no home", parseRepHome(foreignHome.homeGpsLat, foreignHome.homeGpsLng), null);
+    check("a swapped home is no home", parseRepHome(swappedHome.homeGpsLat, swappedHome.homeGpsLng), null);
+    check("a South African home is kept", parseRepHome("-26.10", "28.05"), { lat: -26.1, lng: 28.05 });
+    check("and flagged like a missing one (reminder gate)", hasRoutableHome(foreignHome), false);
+
+    const blankPlan = await generateRepRoute(blankHome, stores, "08:00");
+    const foreignPlan = await generateRepRoute(foreignHome, stores, "08:00");
+    const swappedPlan = await generateRepRoute(swappedHome, stores, "08:00");
+    check("a foreign home anchors on the stores, exactly like a blank one", foreignPlan.homeLatLng, blankPlan.homeLatLng);
+    check("so does a swapped one", swappedPlan.homeLatLng, blankPlan.homeLatLng);
+    check("and no day drives to another continent", foreignPlan.days.every((d) => d.totalDistance < 500), true);
   }
 
   console.log("\nThe out-of-range list\n");

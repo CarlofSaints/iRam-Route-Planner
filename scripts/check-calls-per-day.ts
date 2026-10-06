@@ -10,8 +10,11 @@
  * which must still behave exactly as it did.
  */
 
-import { balanceClusters, applyOverrun, type GeoStore } from "../lib/route-engine";
-import type { RouteDayPlan, Store } from "../lib/types";
+import { balanceClusters, applyOverrun, clusterIntoDays, generateRepRoute, type GeoStore } from "../lib/route-engine";
+import { getVisitsPerWeek, type FrequencyType, type Rep, type RouteDayPlan, type Store } from "../lib/types";
+
+// Never call Google from a check, whatever the shell has loaded.
+delete process.env.GOOGLE_MAPS_API_KEY;
 
 let passed = 0;
 let failed = 0;
@@ -179,5 +182,146 @@ const CENTROIDS = [
   ok("and has no overrun", exact.overrunMinutes === undefined, String(exact.overrunMinutes));
 }
 
-console.log(`\n${passed} passed, ${failed} failed`);
-process.exit(failed === 0 ? 0 : 1);
+// ── Whole engine: every store on the right number of days, in the right week ─
+//
+// 🔴 Two bugs that together put a weekly store on two days of one week and on
+// none of another, with nothing reported unassigned:
+//   1. the balancer reserved the pinned 2x/week room by CLUSTER index before
+//      the clusters were sorted into days, so the room landed on the wrong day;
+//   2. the refit after the trim put a store back on ANY day with room, in any
+//      week, including a day that already held it.
+// Repro from the review: one rep, 30 weekly stores in 5 groups, 2 stores at
+// 2x/week, target 8. Varying where the groups sit reproduces it in about a
+// quarter of layouts.
+
+const REP: Rep = {
+  id: "r1", code: "R1", name: "Test Rep", email: "", cell: "", homeAddress: "",
+  homeGpsLat: "-26.0", homeGpsLng: "28.0", teamId: "", workingHoursPerDay: 8.5,
+};
+
+/** Deterministic pseudo-random numbers, so a failure always reproduces. */
+function lcg(seed: number) {
+  let x = seed >>> 0;
+  return () => {
+    x = (Math.imul(x, 1664525) + 1013904223) >>> 0;
+    return x / 2 ** 32;
+  };
+}
+
+function storeAt(id: string, lat: number, lng: number, frequency: FrequencyType): Store {
+  return { ...store(id), gpsLat: lat.toFixed(5), gpsLng: lng.toFixed(5), frequency };
+}
+
+/** Weeks a store is expected in, and how many days in each (no monthly here). */
+function expectedPerWeek(s: Store): Record<string, number> {
+  if (s.frequency === "quarterly") return { Wk1: 1 };
+  const n = getVisitsPerWeek(s.frequency || "monthly");
+  return { Wk1: n, Wk2: n, Wk3: n, Wk4: n };
+}
+
+/** Every way a plan can put a store on the wrong days. Empty = sound. */
+function placementProblems(stores: Store[], plan: Awaited<ReturnType<typeof generateRepRoute>>): string[] {
+  const problems: string[] = [];
+  const unassigned = new Set(plan.stats.unassignedStores.map((u) => u.storeId));
+  for (const s of stores) {
+    const want = expectedPerWeek(s);
+    for (const week of ["Wk1", "Wk2", "Wk3", "Wk4"]) {
+      const days = plan.days.filter((d) => d.week === week && d.stops.some((st) => st.storeId === s.id));
+      const perDay = plan.days
+        .filter((d) => d.week === week)
+        .map((d) => d.stops.filter((st) => st.storeId === s.id).length);
+      const expected = want[week] ?? 0;
+      if (perDay.some((n) => n > 1)) problems.push(`${s.id} twice on one ${week} day`);
+      if (days.length > expected) problems.push(`${s.id} on ${days.length} days of ${week}, expected ${expected}`);
+      if (days.length < expected && !unassigned.has(s.id)) {
+        problems.push(`${s.id} on ${days.length} days of ${week}, expected ${expected}, and not reported`);
+      }
+    }
+  }
+  return problems;
+}
+
+async function engineChecks() {
+  // 60 layouts of the review's repro: target 8 holds 40 a week, the book is
+  // 34, so a sound engine fits everybody with nothing unassigned.
+  let broken = 0;
+  let leftOver = 0;
+  const firstProblem: string[] = [];
+  for (let layout = 0; layout < 60; layout++) {
+    const rand = lcg(1000 + layout);
+    const stores: Store[] = [];
+    for (let g = 0; g < 5; g++) {
+      const angle = rand() * Math.PI * 2;
+      const dist = 0.05 + rand() * 0.25;
+      const cLat = -26.0 + Math.sin(angle) * dist;
+      const cLng = 28.0 + Math.cos(angle) * dist;
+      for (let i = 0; i < 6; i++) {
+        stores.push(storeAt(`g${g}s${i}`, cLat + (rand() - 0.5) * 0.02, cLng + (rand() - 0.5) * 0.02, "weekly"));
+      }
+    }
+    stores.push(storeAt("twiceA", -26.0 + (rand() - 0.5) * 0.2, 28.0 + (rand() - 0.5) * 0.2, "2x_weekly"));
+    stores.push(storeAt("twiceB", -26.0 + (rand() - 0.5) * 0.2, 28.0 + (rand() - 0.5) * 0.2, "2x_weekly"));
+
+    const plan = await generateRepRoute(REP, stores, "08:00", undefined, undefined, 8);
+    const problems = placementProblems(stores, plan);
+    if (problems.length) {
+      broken++;
+      if (!firstProblem.length) firstProblem.push(`layout ${layout}: ${problems[0]}`);
+    }
+    if (plan.stats.unassignedStores.length) leftOver++;
+  }
+  ok("no layout puts a store on the wrong days of a week", broken === 0, `${broken}/60 broken; ${firstProblem[0] ?? ""}`);
+  ok("a book that fits the target leaves nothing unassigned", leftOver === 0, `${leftOver}/60 layouts left stores over`);
+
+  // The pinned room has to follow the cluster to the DAY it becomes. Uneven
+  // groups (8, 8, 6, 4, 4) with Monday and Friday each carrying two pinned
+  // visits: a sound split leaves at most 6 singles on those two days.
+  {
+    let wrong = 0;
+    let example = "";
+    for (let layout = 0; layout < 60; layout++) {
+      const rand = lcg(5000 + layout);
+      const singles: Store[] = [];
+      [8, 8, 6, 4, 4].forEach((size, g) => {
+        const angle = rand() * Math.PI * 2;
+        const dist = 0.1 + rand() * 0.2;
+        const cLat = -26.0 + Math.sin(angle) * dist;
+        const cLng = 28.0 + Math.cos(angle) * dist;
+        for (let i = 0; i < size; i++) {
+          singles.push(storeAt(`p${g}s${i}`, cLat + (rand() - 0.5) * 0.02, cLng + (rand() - 0.5) * 0.02, "weekly"));
+        }
+      });
+      const days = clusterIntoDays(singles, { lat: -26.0, lng: 28.0 }, { callsPerDay: 8, pinnedPerDay: [2, 0, 0, 0, 2] });
+      if (days[0].length > 6 || days[4].length > 6) {
+        wrong++;
+        if (!example) example = `layout ${layout}: ${days.map((d) => d.length).join(",")}`;
+      }
+    }
+    ok("pinned room is reserved on the day the pins are on", wrong === 0, `${wrong}/60 wrong; ${example}`);
+  }
+
+  // A trim in ONE week with room in the others. Ten quarterly stores land in
+  // Wk1 only, so Wk1 is over a target of 7 and Wk2 to Wk4 have spare days.
+  // The trimmed stores may only go back into Wk1, and only onto a day that
+  // does not already hold them; if Wk1 has no room they are reported.
+  {
+    const rand = lcg(7);
+    const stores: Store[] = [];
+    for (let i = 0; i < 30; i++) {
+      stores.push(storeAt(`w${i}`, -26.0 + (rand() - 0.5) * 0.3, 28.0 + (rand() - 0.5) * 0.3, "weekly"));
+    }
+    for (let i = 0; i < 10; i++) {
+      stores.push(storeAt(`q${i}`, -26.0 + (rand() - 0.5) * 0.3, 28.0 + (rand() - 0.5) * 0.3, "quarterly"));
+    }
+    const plan = await generateRepRoute(REP, stores, "08:00", undefined, undefined, 7);
+    const problems = placementProblems(stores, plan);
+    ok("an overflow is never refitted into another week", problems.length === 0, problems.slice(0, 3).join("; "));
+    ok("and what Wk1 cannot hold is reported", plan.stats.unassignedStores.length >= 5, String(plan.stats.unassignedStores.length));
+    ok("no day exceeds the target after the refit", plan.days.every((d) => d.stops.length <= 7), plan.days.map((d) => d.stops.length).join(","));
+  }
+}
+
+engineChecks().then(() => {
+  console.log(`\n${passed} passed, ${failed} failed`);
+  process.exit(failed === 0 ? 0 : 1);
+});

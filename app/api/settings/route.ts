@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings, saveSettings } from "@/lib/data";
-import { getSession, sessionHasPermission } from "@/lib/auth";
+import { getSession } from "@/lib/auth";
 import { refuseEdit } from "@/lib/editGuard";
+import { refusedRouteSettings } from "@/lib/routeAccess";
 
 export async function GET() {
   try {
@@ -21,6 +22,16 @@ export async function PUT(request: NextRequest) {
     const next = { ...current };
     const changes: string[] = [];
     const session = await getSession();
+
+    // Checked before anything moves: the out-of-range radius and the
+    // calls-per-day target redraw every rep's routes, so they need the same
+    // admin rule as generating them (lib/routeAccess.ts).
+    if (refusedRouteSettings(session, body).length > 0) {
+      return NextResponse.json(
+        { error: "Only an admin can change the out-of-range radius or the calls per day target." },
+        { status: 403 }
+      );
+    }
 
     if (body.outlierRadiusKm !== undefined) {
       const km = Number(body.outlierRadiusKm);
@@ -48,12 +59,9 @@ export async function PUT(request: NextRequest) {
     // Calls per day. `null` clears the target and returns day sizing to the
     // clock; that is a real choice and has to be expressible, which is why it
     // is not folded in with "undefined" (meaning the caller said nothing).
-    // It redraws every rep's week on the next run, so it needs the same
-    // permission as generating routes.
+    // It redraws every rep's week on the next run, so it is admin-only (checked
+    // above, with the radius).
     if (body.callsPerDay !== undefined) {
-      if (!session || !(await sessionHasPermission(session, "generate_routes"))) {
-        return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-      }
       const previous = next.callsPerDay;
       if (body.callsPerDay === null || body.callsPerDay === "") {
         delete next.callsPerDay;
