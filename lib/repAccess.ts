@@ -1,9 +1,9 @@
 /**
  * What a `rep` login is allowed to reach.
  *
- * Reps exist in this app so they can maintain their OWN profile — chiefly the
- * home address the route engine anchors their day on. They do not plan routes,
- * read the dashboard or look at anyone else's numbers, so the gate is an
+ * Reps come here to read their OWN route and keep their own profile, chiefly
+ * the home address the route engine anchors their day on. They do not plan
+ * routes, read the dashboard or look at anyone else's numbers, so the gate is an
  * allow-list rather than a set of per-view filters: everything is denied unless
  * it is named here.
  *
@@ -23,6 +23,11 @@ const REP_ALLOWED = [
   "/api/account", // + /avatar, + /rep-profile
   "/api/auth", // session read, sign out, first-login password change
   "/login",
+  // Their OWN route. The API resolves the rep from the session and returns
+  // that one plan only; /routes and /map stay shut because their APIs return
+  // every rep's book.
+  "/my-route",
+  "/api/my-route",
   // The guide explains the whole system, including the one page a rep uses. It
   // reads no data of its own, so there is nothing here to scope, and a rep being
   // unable to read the instructions for their own screen is a silly line to draw.

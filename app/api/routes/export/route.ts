@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRoutes, getReps, getTeams } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
+import { scopeRouteDoc, visibleRepCodes } from "@/lib/routeAccess";
 import { WeekLabel, DayLabel } from "@/lib/types";
 import XLSX from "xlsx";
 
@@ -9,18 +10,19 @@ const DAYS: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"
 
 export async function GET(request: NextRequest) {
   try {
-    await requireSession();
+    const session = await requireSession();
 
     const { searchParams } = new URL(request.url);
     const teamId = searchParams.get("teamId") || "";
     const includeTimes = searchParams.get("includeTimes") === "1";
 
-    const routes = await getRoutes();
+    const reps = await getReps();
+    // Scoped like GET /api/routes: a team manager gets their own team, never the book.
+    const routes = scopeRouteDoc(await getRoutes(), visibleRepCodes(session, reps));
     if (!routes || routes.repPlans.length === 0) {
       return NextResponse.json({ error: "No routes generated" }, { status: 404 });
     }
 
-    const reps = await getReps();
     const teams = await getTeams();
 
     // Filter rep plans by team if specified

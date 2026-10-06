@@ -5,8 +5,12 @@ import { Store, Channel, Rep, storeRoleColumns } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("storeUpload");
+  if (denied) return denied;
+
   try {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;

@@ -3,6 +3,7 @@ import { validateCredentials, encodeSession, getSession, SESSION_COOKIE, SESSION
 import { getReps, getTeams, getUsers, getRolePermissions } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
 import { findTeamForManager, normaliseEmail } from "@/lib/manager";
+import { isTeamRole } from "@/lib/roles";
 
 export const dynamic = "force-dynamic";
 
@@ -38,7 +39,7 @@ export async function POST(request: NextRequest) {
       const reps = await getReps();
       const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(session.email));
       if (rep) session.repCode = rep.code;
-    } else if (session.role === "teamManager") {
+    } else if (isTeamRole(session.role)) {
       const team = findTeamForManager(await getTeams(), session.email);
       if (team) session.teamId = team.id;
     }

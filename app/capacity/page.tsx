@@ -4,6 +4,7 @@ import { useState, useEffect, useMemo } from "react";
 import { useSession } from "@/components/SessionProvider";
 import { Team } from "@/lib/types";
 import { DAILY_CALL_WARNING } from "@/lib/capacity";
+import { isTeamRole } from "@/lib/roles";
 
 interface RepCapacity {
   repCode: string;
@@ -78,7 +79,7 @@ export default function CapacityPage() {
   const [confirming, setConfirming] = useState<string | null>(null);
 
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
-  const isTeamManager = session?.role === "teamManager";
+  const isTeamManager = isTeamRole(session?.role);
   const isRep = session?.role === "rep";
 
   const loadOutliers = () =>

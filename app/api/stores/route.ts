@@ -3,6 +3,7 @@ import { getStores, saveStores, getChannels, getStoreOverrides, saveStoreOverrid
 import { Store, FrequencyType } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function GET() {
   try {
@@ -14,6 +15,9 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const denied = await refuseEdit("stores");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { id, ...updates } = body as Partial<Store> & { id: string };

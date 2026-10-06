@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getRoutes, getRoutesForType, getStores } from "@/lib/data";
 import { DayLabel } from "@/lib/types";
-import { requireSession } from "@/lib/auth";
 import { parseClock, formatClock } from "@/lib/clock";
+import { requireAdmin } from "@/lib/auth";
 import XLSX from "xlsx";
 
 // NOTE: carried over from the Repsly build — this is a best-guess schedule-import
@@ -41,7 +41,8 @@ function startMondayUTC(): Date {
 
 export async function GET(request: NextRequest) {
   try {
-    await requireSession();
+    // Admin only: this is the whole business's call cycle, the file loaded into Perigee.
+    await requireAdmin();
 
     const sp = request.nextUrl.searchParams;
     const months = Math.min(6, Math.max(1, Number(sp.get("months")) || 3));
@@ -140,6 +141,9 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (err) {
+    if (String(err).includes("Forbidden")) {
+      return NextResponse.json({ error: "Only an admin can build the Perigee file." }, { status: 403 });
+    }
     if (String(err).includes("Unauthorized")) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     }

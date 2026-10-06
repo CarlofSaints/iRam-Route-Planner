@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getSettings, saveSettings } from "@/lib/data";
 import { getSession, sessionHasPermission } from "@/lib/auth";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function GET() {
   try {
@@ -11,6 +12,9 @@ export async function GET() {
 }
 
 export async function PUT(request: NextRequest) {
+  const denied = await refuseEdit("settings");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const current = await getSettings();

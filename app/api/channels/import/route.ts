@@ -12,8 +12,12 @@ import { resolveRoleDefault, roleCallsOnChannel, roleDefaultFor } from "@/lib/re
 import { requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import * as XLSX from "xlsx";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("channels");
+  if (denied) return denied;
+
   try {
     const session = await requireSession();
 

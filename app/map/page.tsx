@@ -8,6 +8,7 @@ import { Store, Rep, Channel, Team, RoutePlanDocument, RouteDayPlan, WeekLabel, 
 import { decodePolyline } from "@/lib/google-maps";
 import { parseLatLng, haversineKm } from "@/lib/latlng";
 import type { RouteLine } from "./MapView";
+import { isTeamRole } from "@/lib/roles";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
@@ -263,7 +264,7 @@ function MapPageInner() {
   const [selectedTypeId, setSelectedTypeId] = useState("");
 
   const isAdmin = session?.role === "superAdmin" || session?.role === "admin";
-  const isTeamManager = session?.role === "teamManager";
+  const isTeamManager = isTeamRole(session?.role);
   const isRep = session?.role === "rep";
 
   // Filters — initialize from URL params (for "View on Map" links from Routes page)

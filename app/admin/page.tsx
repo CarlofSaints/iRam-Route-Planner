@@ -16,14 +16,16 @@ interface UserData {
 const ROLES: { value: UserRole; label: string; description: string }[] = [
   { value: "superAdmin", label: "Super Admin", description: "Full access to all settings, users, and data" },
   { value: "admin", label: "Admin", description: "Can manage reps, stores, channels, and view reports" },
-  { value: "teamManager", label: "Team Manager", description: "Can view and manage their assigned team and reps" },
-  { value: "rep", label: "Rep", description: "Can view their own routes and store assignments" },
+  { value: "teamAdmin", label: "Team Admin", description: "A team manager who can also change channels, teams and store uploads" },
+  { value: "teamManager", label: "Team Manager", description: "Their team. Can change stores, store overrides, call cycle types and settings" },
+  { value: "rep", label: "Rep", description: "Can view their own route and keep their own profile" },
   { value: "viewer", label: "Viewer", description: "Read-only access to dashboards and reports" },
 ];
 
 const ROLE_COLORS: Record<UserRole, string> = {
   superAdmin: "bg-red-50 text-red-700",
   admin: "bg-blue-50 text-blue-700",
+  teamAdmin: "bg-teal-50 text-teal-700",
   teamManager: "bg-green-50 text-green-700",
   rep: "bg-purple-50 text-purple-700",
   viewer: "bg-gray-100 text-gray-600",
@@ -32,6 +34,7 @@ const ROLE_COLORS: Record<UserRole, string> = {
 const ROLE_DOTS: Record<UserRole, string> = {
   superAdmin: "bg-iram-green",
   admin: "bg-blue-500",
+  teamAdmin: "bg-teal-500",
   teamManager: "bg-green-500",
   rep: "bg-purple-500",
   viewer: "bg-gray-400",

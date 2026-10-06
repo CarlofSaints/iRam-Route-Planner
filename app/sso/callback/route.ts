@@ -6,6 +6,7 @@ import { getUsers, saveUsers, getReps, getTeams } from "@/lib/data";
 import { logActivity } from "@/lib/activityLog";
 import { SessionPayload, User } from "@/lib/types";
 import { findTeamForManager, normaliseEmail } from "@/lib/manager";
+import { isTeamRole } from "@/lib/roles";
 
 // The slug this module is registered under in the iRam Hub's /admin/modules.
 // It must match exactly — the Hub puts the user's allowed slugs in the token.
@@ -93,7 +94,7 @@ export async function GET(request: NextRequest) {
     const reps = await getReps();
     const rep = reps.find((r) => normaliseEmail(r.email) === normaliseEmail(session.email));
     if (rep) session.repCode = rep.code;
-  } else if (session.role === "teamManager") {
+  } else if (isTeamRole(session.role)) {
     const team = findTeamForManager(await getTeams(), session.email);
     if (team) session.teamId = team.id;
   }

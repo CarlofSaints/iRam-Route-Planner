@@ -3,6 +3,7 @@ import { getCallCycleTypes, saveCallCycleTypes } from "@/lib/data";
 import { CallCycleType, CallCycleStrategy } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function GET() {
   try {
@@ -14,6 +15,9 @@ export async function GET() {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("callCycleTypes");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { name, strategy, description } = body as {
@@ -54,6 +58,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const denied = await refuseEdit("callCycleTypes");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { id, name, description, active } = body as Partial<CallCycleType> & { id: string };
@@ -85,6 +92,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const denied = await refuseEdit("callCycleTypes");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { id } = body as { id: string };

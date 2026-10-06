@@ -84,11 +84,12 @@ export async function middleware(request: NextRequest) {
   if (session.role === "rep" && !isRepAllowedPath(pathname)) {
     if (pathname.startsWith("/api/")) {
       return NextResponse.json(
-        { error: "Reps may only view and update their own profile." },
+        { error: "Reps may only view their own route and update their own profile." },
         { status: 403 }
       );
     }
-    return NextResponse.redirect(new URL("/account", request.url));
+    // Their own route is the landing page now; Account is one tap away.
+    return NextResponse.redirect(new URL("/my-route", request.url));
   }
 
   return NextResponse.next();

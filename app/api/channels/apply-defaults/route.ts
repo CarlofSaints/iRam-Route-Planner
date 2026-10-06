@@ -10,6 +10,7 @@ import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { applyChannelDefaults, overriddenStoreIds } from "@/lib/channelDefaults";
 import { Store, Channel, StoreOverride } from "@/lib/types";
+import { refuseEdit } from "@/lib/editGuard";
 
 export const dynamic = "force-dynamic";
 export const maxDuration = 60;
@@ -93,12 +94,14 @@ export async function GET(request: NextRequest) {
 
 // POST — apply.
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("channels");
+  if (denied) return denied;
+
   try {
     const session = await getSession();
     if (!session) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-    if (session.role !== "superAdmin" && session.role !== "admin") {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
-    }
+    // Who may apply is decided by refuseEdit("channels") above: admins and
+    // Team Admins. A team manager may not change channels.
 
     const body = await request.json().catch(() => ({}));
     const protectManualEdits = body.protectManualEdits !== false;

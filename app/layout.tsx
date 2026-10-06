@@ -59,7 +59,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   const { session } = useSession();
   const isLogin = pathname === "/login";
 
-  // A rep's login exists so they can maintain their own profile. Every other
+  // A rep's login exists so they can read their own route and maintain their
+  // own profile. Every other
   // nav item would 403 or bounce them back here, and a sidebar full of links
   // that don't work reads as a broken app rather than a deliberate one.
   const isRep = session?.role === "rep";
@@ -94,12 +95,21 @@ function AppShell({ children }: { children: React.ReactNode }) {
         {/* Nav */}
         <nav className="flex-1 py-4 overflow-y-auto">
           {isRep ? (
-            <NavLink
-              href="/account"
-              label="My Profile"
-              icon="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
-              active={pathname === "/account"}
-            />
+            <>
+              {/* A rep's own route leads their menu: it is what they sign in for. */}
+              <NavLink
+                href="/my-route"
+                label="My Route"
+                icon="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+                active={pathname === "/my-route"}
+              />
+              <NavLink
+                href="/account"
+                label="My Profile"
+                icon="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
+                active={pathname === "/account"}
+              />
+            </>
           ) : (
             <>
           {/* Top nav items */}

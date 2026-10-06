@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, saveReps, getUsers } from "@/lib/data";
+import { getReps, saveReps } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { geocodeAddress, isConfidentGeocode, hasGoogleMapsKey } from "@/lib/google-maps";
-import { Rep, SessionPayload } from "@/lib/types";
+import { Rep } from "@/lib/types";
+import { resolveOwnRep } from "@/lib/ownRep";
+import { checkCoordinate } from "@/lib/saCoordinates";
 
 /**
  * A rep maintaining their OWN rep record — in practice, the home address the
@@ -20,31 +22,6 @@ import { Rep, SessionPayload } from "@/lib/types";
  * no amount of geocoding will place them. A rep standing in their own kitchen
  * tapping "use my current location" is the only source that actually knows.
  */
-
-/**
- * Which Rep record belongs to this login.
- *
- * By id when the account was created from a rep (which is what the Create
- * Account button does), falling back to the email match the session already
- * uses. The fallback is what keeps any account made before `repId` existed —
- * or made by hand in User Admin — working.
- */
-async function resolveOwnRep(session: SessionPayload): Promise<Rep | null> {
-  const reps = await getReps();
-  const users = await getUsers();
-  const user = users.find((u) => u.id === session.userId);
-
-  if (user?.repId) {
-    const byId = reps.find((r) => r.id === user.repId);
-    if (byId) return byId;
-  }
-  if (session.repCode) {
-    const byCode = reps.find((r) => r.code === session.repCode);
-    if (byCode) return byCode;
-  }
-  const email = (session.email || "").toLowerCase().trim();
-  return reps.find((r) => (r.email || "").toLowerCase().trim() === email) ?? null;
-}
 
 /** Never hand back the whole rep record — only what the profile page edits. */
 function publicView(rep: Rep) {
@@ -94,11 +71,14 @@ export async function PUT(request: NextRequest) {
     }
 
     const body = await request.json().catch(() => ({}));
-    const { homeAddress, lat, lng } = body as {
+    const { homeAddress, lat, lng, source } = body as {
       homeAddress?: string;
       lat?: number;
       lng?: number;
+      /** "map" when the rep dropped the pin themselves; absent = device GPS. */
+      source?: string;
     };
+    const fromMap = source === "map";
 
     const reps = await getReps();
     const idx = reps.findIndex((r) => r.id === rep.id);
@@ -116,21 +96,32 @@ export async function PUT(request: NextRequest) {
     const trimmedAddress = (homeAddress || "").trim();
     const addressChanged =
       addressGiven && trimmedAddress !== (reps[idx].homeAddress || "").trim();
+    const hadPin = !!((reps[idx].homeGpsLat || "").trim() && (reps[idx].homeGpsLng || "").trim());
 
     if (addressGiven) reps[idx].homeAddress = trimmedAddress;
 
     let note = "";
     let precise = false;
+    // Where Google THINKS the address is, when it is not sure enough to save.
+    // The page opens the pin map there so the rep only has to nudge it onto
+    // their house, instead of being left with an address and no pin, and a
+    // weekly email telling them to do what they believe they already did.
+    let approx: { lat: number; lng: number; formattedAddress: string } | null = null;
 
     if (hasDeviceFix) {
       reps[idx].homeGpsLat = String(lat);
       reps[idx].homeGpsLng = String(lng);
       precise = true;
-      note = "Saved the exact spot you're standing in. Your route will now start from here.";
-    } else if (addressChanged) {
+      note = fromMap
+        ? "Saved your pin. Your route will now start from there."
+        : "Saved the exact spot you're standing in. Your route will now start from here.";
+    } else if (addressChanged || (addressGiven && !hadPin)) {
       // A changed address invalidates coordinates derived from the old one —
       // the same rule PUT /api/reps follows. Leaving them would anchor the
       // rep's week on where they used to live, silently and plausibly.
+      // An UNCHANGED address with no pin is looked up again too: those reps
+      // (typed it weeks ago, never pinned) press Save expecting something to
+      // happen, and need the map opened where Google thinks they live.
       reps[idx].homeGpsLat = "";
       reps[idx].homeGpsLng = "";
 
@@ -140,15 +131,21 @@ export async function PUT(request: NextRequest) {
           reps[idx].homeGpsLat = String(g.lat);
           reps[idx].homeGpsLng = String(g.lng);
           precise = true;
-          note = `Found it — ${g.formattedAddress}. Your route will now start from there.`;
+          note = `Found it: ${g.formattedAddress}. Your route will now start from there.`;
         } else if (g) {
+          // Only offered as a starting point when it is in South Africa. A
+          // place name with no country can geocode to the USA, and a pin map
+          // opened over another continent is no help to anyone.
+          if (checkCoordinate(String(g.lat), String(g.lng)).problem === null) {
+            approx = { lat: g.lat, lng: g.lng, formattedAddress: g.formattedAddress };
+          }
           note =
-            "We found the area but not the exact spot, so your route can't start from home yet. " +
-            "Tap \"Use my current location\" while you're at home and it will be exact.";
+            "We found the area but not your exact house, so your route can't start from home yet. " +
+            "Drag the pin onto your house on the map and save it.";
         } else {
           note =
-            "We couldn't find that address on the map. Tap \"Use my current location\" while " +
-            "you're at home and we won't need to look it up at all.";
+            'We couldn\'t find that address on the map. Tap "Drop a pin on the map" and put it on ' +
+            'your house, or tap "Use my current location" while you\'re at home.';
         }
       } else if (trimmedAddress) {
         note = "Address saved. Tap \"Use my current location\" while you're at home to pin it exactly.";
@@ -162,7 +159,7 @@ export async function PUT(request: NextRequest) {
       actor: session.email,
       actorName: session.name,
       summary: `${reps[idx].name} (${reps[idx].code}) updated their home ${
-        hasDeviceFix ? "location from their device" : "address"
+        hasDeviceFix ? (fromMap ? "location by dropping a pin" : "location from their device") : "address"
       }`,
     });
 
@@ -170,6 +167,7 @@ export async function PUT(request: NextRequest) {
       rep: publicView(reps[idx]),
       precise,
       note,
+      approx,
     });
   } catch (err) {
     const msg = String(err);

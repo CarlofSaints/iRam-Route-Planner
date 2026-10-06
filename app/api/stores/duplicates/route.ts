@@ -3,6 +3,7 @@ import { getStores, saveStores, getChannels } from "@/lib/data";
 import { buildDuplicateGroups } from "@/lib/duplicates";
 import { getSession, requireSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function GET() {
   try {
@@ -32,6 +33,9 @@ export async function GET() {
 }
 
 export async function POST() {
+  const denied = await refuseEdit("storeDuplicates");
+  if (denied) return denied;
+
   try {
     await requireSession();
     const stores = await getStores();

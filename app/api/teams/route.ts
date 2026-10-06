@@ -3,6 +3,7 @@ import { getTeams, saveTeams } from "@/lib/data";
 import { Team } from "@/lib/types";
 import { getSession } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
+import { refuseEdit } from "@/lib/editGuard";
 
 export async function GET() {
   try {
@@ -26,6 +27,9 @@ function tidy(value: unknown): string {
 }
 
 export async function POST(request: NextRequest) {
+  const denied = await refuseEdit("teams");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const teams = await getTeams();
@@ -51,6 +55,9 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
+  const denied = await refuseEdit("teams");
+  if (denied) return denied;
+
   try {
     const body = await request.json();
     const { id, ...updates } = body as Partial<Team> & { id: string };
@@ -75,6 +82,9 @@ export async function PUT(request: NextRequest) {
 }
 
 export async function DELETE(request: NextRequest) {
+  const denied = await refuseEdit("teams");
+  if (denied) return denied;
+
   try {
     const { id } = await request.json();
     const teams = await getTeams();
