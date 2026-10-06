@@ -407,12 +407,12 @@ export default function RoutesPage() {
     }));
   };
 
-  const saveGps = async (storeIds: string[]) => {
+  // Saves the numbers CoordinateEntry checked, not the raw text in the boxes:
+  // "- 26.1" passes the check once cleaned but parseFloat reads it as NaN.
+  const saveGps = async (storeIds: string[], latN: number, lngN: number) => {
     const primary = storeIds[0];
-    const lat = gpsValue(primary, "lat").trim();
-    const lng = gpsValue(primary, "lng").trim();
-    const latN = parseFloat(lat);
-    const lngN = parseFloat(lng);
+    const lat = String(latN);
+    const lng = String(lngN);
     if (
       isNaN(latN) || isNaN(lngN) ||
       latN < -90 || latN > 90 || lngN < -180 || lngN > 180
@@ -423,7 +423,7 @@ export default function RoutesPage() {
     setError("");
     setGpsSaving(primary);
     try {
-      // Same physical store may have several duplicate records — fix them all.
+      // Same physical store may have several duplicate records: fix them all.
       for (const id of storeIds) {
         const res = await fetch("/api/stores", {
           method: "PUT",
@@ -883,7 +883,7 @@ export default function RoutesPage() {
                           setGpsField(primary, "lat", lat);
                           setGpsField(primary, "lng", lng);
                         }}
-                        onSave={() => saveGps(g.storeIds)}
+                        onSave={(lat, lng) => saveGps(g.storeIds, lat, lng)}
                         saving={gpsSaving === primary}
                         storeName={g.storeName}
                         nearby={nearbyForPlan}
