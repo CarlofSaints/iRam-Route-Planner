@@ -38,7 +38,50 @@ export interface Channel {
    * existed — so no migration is needed.
    */
   roleDefaults?: Record<string, ChannelRoleDefault>;
+  /**
+   * Nobody calls on this channel, in any visit role.
+   *
+   * Some retailers order automatically and are never visited, so their stores
+   * are excluded from routing entirely rather than being given a frequency
+   * nobody honours and hours charged to a rep who never goes there.
+   *
+   * Named for what a manager switches off rather than inverted to a positive
+   * flag, because ABSENT has to mean "reps call here". Every channel that exists
+   * today predates this field, and a flag whose absence excluded them would
+   * empty every call cycle the moment it shipped.
+   *
+   * It is a CHANNEL-level default, not a verdict on every store in it: an
+   * approved Call Override on a single store puts that store back in the cycle.
+   * lib/routable.ts is the one place that decides. The per-role switch in
+   * `roleDefaults[role].enabled` is the narrower tool (QC never visits Makro);
+   * this one takes the channel out for everybody, the sales rep included.
+   */
+  notARepChannel?: boolean;
+  /**
+   * Where this channel came from. ABSENT means it predates the field, which is
+   * most of them, and is shown as "Not recorded" rather than guessed at.
+   */
+  source?: ChannelSource;
+  /** When it was created, for the sources that know. */
+  sourceAt?: string;
 }
+
+export type ChannelSource =
+  /** Created by Store Upload when a row named a channel nobody had set up. */
+  | "store_upload"
+  /** Created by the Channels page Excel import. */
+  | "excel"
+  /** Typed in by hand with Add Channel. */
+  | "manual"
+  /** Part of the original seed data. */
+  | "seed";
+
+export const CHANNEL_SOURCE_LABEL: Record<ChannelSource, string> = {
+  store_upload: "Store Upload",
+  excel: "Channels Excel import",
+  manual: "Added by hand",
+  seed: "Original seed",
+};
 
 export type FrequencyType =
   | "daily"
@@ -299,7 +342,23 @@ export interface Store {
   rangeConfirmed?: boolean; // manager confirmed this store is in the rep's cycle despite being far from their area
   region?: string; // user-defined region
   province?: string; // auto-populated from GPS via Google Geocoding
+  /**
+   * The shop is shut and no rep is sent there. Absent means open.
+   *
+   * iRam has no feed that says a store has closed, so in this app the flag is
+   * only ever set by a person on the Stores page. lib/closedStores.ts holds the
+   * rules; read it through isClosed(), never by testing the field directly.
+   */
+  closed?: boolean;
+  /** Why it is shut. Only "manual" exists in iRam. */
+  closedReason?: ClosedReason;
+  /** When it was marked closed (ISO). Cleared on reopening. */
+  closedAt?: string;
+  /** A person ruled on this store's status, open or closed. */
+  statusDecidedByHand?: boolean;
 }
+
+export type ClosedReason = "manual";
 
 export const SA_PROVINCES = [
   "Eastern Cape",

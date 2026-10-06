@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useMemo, useRef } from "react";
+import { useTableSort, useSortedRows, SortableTh } from "@/components/TableSort";
 import { Rep, VisitRole, Team } from "@/lib/types";
 import { useSession } from "@/components/SessionProvider";
 import HomeAddressReminders from "@/components/HomeAddressReminders";
@@ -131,6 +132,7 @@ export default function RepsPage() {
   const [accountResult, setAccountResult] = useState<CreateAccountResponse | null>(null);
   const [accountError, setAccountError] = useState("");
   const [bulkProgress, setBulkProgress] = useState<{ done: number; total: number } | null>(null);
+  const [search, setSearch] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
   const canExport = can("export_data");
@@ -409,6 +411,44 @@ export default function RepsPage() {
     });
     load();
   };
+
+  /**
+   * Matches on everything a person might have to hand: the code, the name,
+   * and the email or cell they were phoned on. Address too, so a suburb finds
+   * its reps (Clippa 58286d8).
+   *
+   * A rep being EDITED stays visible whatever the search says. Typing in the
+   * search box while a row is open would otherwise make that row vanish with
+   * unsaved changes in it, which reads as the edit having been thrown away.
+   */
+  const visibleReps = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return reps;
+    return reps.filter(
+      (r) =>
+        r.id === editing ||
+        [r.code, r.name, r.email, r.cell, r.homeAddress].some((v) => (v || "").toLowerCase().includes(q))
+    );
+  }, [reps, search, editing]);
+
+  const sort = useTableSort("", "asc", ["hours"]);
+  const sortedReps = useSortedRows<Rep>(
+    visibleReps,
+    {
+      code: (r) => r.code,
+      name: (r) => r.name,
+      email: (r) => r.email || null,
+      cell: (r) => r.cell || null,
+      address: (r) => r.homeAddress || null,
+      // Reps with no home anchor first when ascending: they are the to-do list.
+      home: (r) => hasHomeGps(r),
+      login: (r) => repsWithLogin.has(r.id),
+      team: (r) => teams.find((t) => t.id === r.teamId)?.name || null,
+      role: (r) => roleName(r.visitRoleId),
+      hours: (r) => r.workingHoursPerDay ?? 8.5,
+    },
+    sort
+  );
 
   if (loading) {
     return (
@@ -716,25 +756,51 @@ export default function RepsPage() {
 
       {/* Reps Table */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-100">
-        <div className="overflow-x-auto">
+        <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-100">
+          <div className="relative">
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => { if (e.key === "Escape") setSearch(""); }}
+              placeholder="Filter by name, code, email, cell or address..."
+              className="w-80 border border-gray-200 rounded-lg pl-3 pr-7 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-iram-green"
+            />
+            {search && (
+              <button
+                onClick={() => setSearch("")}
+                title="Clear the filter"
+                className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 text-sm px-1"
+              >
+                &times;
+              </button>
+            )}
+          </div>
+          <span className="text-xs text-gray-500">
+            {search ? `Showing ${sortedReps.length} of ${reps.length} reps` : `${reps.length} reps`}
+          </span>
+        </div>
+        {/* The head sticks to THIS scroller, so it needs its own bounded
+            height; let the page scroll instead and the head leaves with it.
+            Each cell carries the background, or rows show through it. */}
+        <div className="overflow-x-auto overflow-y-auto max-h-[calc(100vh-18rem)] rounded-b-xl">
           <table className="w-full text-sm">
             <thead>
-              <tr className="bg-gray-50 text-left text-xs text-gray-500 uppercase tracking-wider">
-                <th className="px-6 py-3">Code</th>
-                <th className="px-6 py-3">Name</th>
-                <th className="px-6 py-3">Email</th>
-                <th className="px-6 py-3">Cell</th>
-                <th className="px-6 py-3">Home Address</th>
-                <th className="px-6 py-3">Starts Day At</th>
-                {canCreateAccounts && <th className="px-6 py-3">Login</th>}
-                <th className="px-6 py-3">Team</th>
-                <th className="px-6 py-3">Visit Role</th>
-                <th className="px-6 py-3 text-center">Hours/Day</th>
+              <tr className="text-left text-xs text-gray-500 uppercase tracking-wider [&>th]:sticky [&>th]:top-0 [&>th]:z-20 [&>th]:bg-gray-50 [&>th]:shadow-[inset_0_-1px_0_#e5e7eb]">
+                <SortableTh sortId="code" sort={sort} className="px-6 py-3">Code</SortableTh>
+                <SortableTh sortId="name" sort={sort} className="px-6 py-3">Name</SortableTh>
+                <SortableTh sortId="email" sort={sort} className="px-6 py-3">Email</SortableTh>
+                <SortableTh sortId="cell" sort={sort} className="px-6 py-3">Cell</SortableTh>
+                <SortableTh sortId="address" sort={sort} className="px-6 py-3">Home Address</SortableTh>
+                <SortableTh sortId="home" sort={sort} className="px-6 py-3">Starts Day At</SortableTh>
+                {canCreateAccounts && <SortableTh sortId="login" sort={sort} className="px-6 py-3">Login</SortableTh>}
+                <SortableTh sortId="team" sort={sort} className="px-6 py-3">Team</SortableTh>
+                <SortableTh sortId="role" sort={sort} className="px-6 py-3">Visit Role</SortableTh>
+                <SortableTh sortId="hours" sort={sort} align="center" className="px-6 py-3">Hours/Day</SortableTh>
                 <th className="px-6 py-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {reps.map((rep) => (
+              {sortedReps.map((rep) => (
                 <tr key={rep.id} className="hover:bg-gray-50">
                   {editing === rep.id ? (
                     <>
@@ -921,6 +987,22 @@ export default function RepsPage() {
                   )}
                 </tr>
               ))}
+              {sortedReps.length === 0 && (
+                <tr>
+                  <td colSpan={canCreateAccounts ? 11 : 10} className="px-6 py-8 text-center text-sm text-gray-500">
+                    {search ? (
+                      <>
+                        No rep matches &ldquo;{search}&rdquo;.{" "}
+                        <button onClick={() => setSearch("")} className="text-iram-green hover:underline">
+                          Clear the filter
+                        </button>
+                      </>
+                    ) : (
+                      "No reps yet."
+                    )}
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>

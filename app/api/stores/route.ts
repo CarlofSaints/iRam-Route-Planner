@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getStores, saveStores, getChannels, getStoreOverrides, saveStoreOverrides } from "@/lib/data";
 import { Store, FrequencyType } from "@/lib/types";
-import { getSession } from "@/lib/auth";
+import { getSession, sessionHasPermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 import { refuseEdit } from "@/lib/editGuard";
+import { applyStatus, isClosed } from "@/lib/closedStores";
 
 export async function GET() {
   try {
@@ -19,12 +20,28 @@ export async function PUT(request: NextRequest) {
   if (denied) return denied;
 
   try {
+    // This route closes stores now, which takes them out of every call cycle,
+    // so it can no longer rest on "signed in" alone. Every page that writes
+    // here (Stores, Routes, Not in a cycle) is used by roles holding this.
+    const caller = await getSession();
+    if (!caller) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!(await sessionHasPermission(caller, "manage_stores"))) {
+      return NextResponse.json({ error: "You do not have permission to edit stores." }, { status: 403 });
+    }
+
     const body = await request.json();
     const { id, ...updates } = body as Partial<Store> & { id: string };
 
     const stores = await getStores();
     const idx = stores.findIndex((s) => s.id === id);
     if (idx === -1) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+    // Active/Closed, by hand. Goes through the one helper so a reopened store
+    // loses its old reason and date instead of carrying them forever.
+    let statusChanged = false;
+    if (updates.closed !== undefined) {
+      statusChanged = applyStatus(stores[idx], updates.closed === true);
+    }
 
     if (updates.repCode !== undefined) stores[idx].repCode = updates.repCode;
     if (updates.channelId !== undefined) stores[idx].channelId = updates.channelId;
@@ -104,7 +121,14 @@ export async function PUT(request: NextRequest) {
       }
     }
 
-    logActivity({ action: "Updated store", actor: session?.email || "unknown", actorName: session?.name || "Unknown", summary: `Updated store ${stores[idx].name}` });
+    logActivity({
+      action: statusChanged ? (isClosed(stores[idx]) ? "Closed store" : "Reopened store") : "Updated store",
+      actor: session?.email || "unknown",
+      actorName: session?.name || "Unknown",
+      summary: statusChanged
+        ? `${stores[idx].name} (${stores[idx].placeId}) marked ${isClosed(stores[idx]) ? "Closed: out of every call cycle" : "Active: back in the call cycles"}`
+        : `Updated store ${stores[idx].name}`,
+    });
 
     return NextResponse.json(stores[idx]);
   } catch (err) {

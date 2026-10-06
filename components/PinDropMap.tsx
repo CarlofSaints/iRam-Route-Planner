@@ -3,10 +3,9 @@
 /**
  * Pick a store's location by dropping a pin.
  *
- * The right tool here because a Clippa store record has NO address field —
- * only a name, a province and a rep. There is nothing to geocode, so typing
- * numbers was the only way to place 1 786 stores, and typing numbers is how a
- * digit goes missing.
+ * Ported from Clippa. An iRam store record has no street address either, only
+ * a name, a province and a rep, so there is nothing to geocode and typing
+ * numbers is the only other way in. Typing numbers is how a digit goes missing.
  *
  * 🔴 The map opens on the rep's OTHER stores, not on Gauteng. A picker that
  * opens 1 400 km from the shop you are placing is a picker nobody uses — and
@@ -19,6 +18,9 @@ import { MapContainer, TileLayer, Marker, CircleMarker, Popup, useMap, useMapEve
 import L from "leaflet";
 import "leaflet/dist/leaflet.css";
 import { checkCoordinate } from "@/lib/saCoordinates";
+
+/** lib/saCoordinates is shared byte-for-byte with Clippa; keep its long dashes off screen. */
+export const plainDash = (text: string) => text.replace(/\s*—\s*/g, ": ");
 
 export interface NearbyStore {
   lat: number;
@@ -178,7 +180,7 @@ export default function PinDropMap({
 
           {/* The same rule the typed boxes use, so a pin dropped in the sea off
               Namibia is refused here too rather than at save time. */}
-          {check?.message && <span className="text-xs text-red-600">{check.message}</span>}
+          {check?.message && <span className="text-xs text-red-600">{plainDash(check.message)}</span>}
 
           <div className="ml-auto flex items-center gap-2">
             <button

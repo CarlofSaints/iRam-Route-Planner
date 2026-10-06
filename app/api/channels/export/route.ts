@@ -23,6 +23,8 @@ export async function GET() {
       "Channel Name",
       "Frequency",
       "Duration (min)",
+      // Whether anybody calls on the channel at all. Read back by Import Excel.
+      "Reps Call Here",
     ];
     for (const role of extraRoles) {
       const c = roleColumns(role);
@@ -34,7 +36,7 @@ export async function GET() {
     const sorted = [...channels].sort((a, b) => a.name.localeCompare(b.name));
 
     for (const ch of sorted) {
-      const row: (string | number)[] = [ch.name, ch.frequency, ch.duration];
+      const row: (string | number)[] = [ch.name, ch.frequency, ch.duration, ch.notARepChannel ? "No" : "Yes"];
       for (const role of extraRoles) {
         const calls = roleCallsOnChannel(ch, role);
         const eff = resolveRoleDefault(ch, role);
@@ -54,6 +56,7 @@ export async function GET() {
       { wch: 30 }, // Channel Name
       { wch: 20 }, // Frequency
       { wch: 18 }, // Duration
+      { wch: 15 }, // Reps Call Here
       ...extraRoles.flatMap(() => [{ wch: 10 }, { wch: 20 }, { wch: 20 }]),
     ];
 
@@ -93,6 +96,10 @@ export async function GET() {
     roleRows.push([
       "Calls",
       'Set to "No" where the role never visits that channel. Those stores drop out of that role\'s routes and out of their capacity entirely. "Yes" puts them back.',
+    ]);
+    roleRows.push([
+      "Reps Call Here",
+      'Set to "No" for a channel nobody visits (for example a retailer that orders automatically). Its stores leave every call cycle, for every visit role, at the next route generation. A store with an approved Call Override is still visited. A blank cell changes nothing.',
     ]);
     roleRows.push([
       "Frequency / Duration",

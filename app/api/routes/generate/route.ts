@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, saveRoutes, saveRoutesForType, getRoutes, getRoutesForType, getCallCycleTypes, getSettings, getVisitRoles, getChannels } from "@/lib/data";
+import { getReps, getStores, saveRoutes, saveRoutesForType, getRoutes, getRoutesForType, getCallCycleTypes, getSettings, getVisitRoles, getChannels, getStoreOverrides } from "@/lib/data";
+import { routableStores } from "@/lib/routable";
 import { RoutePlanDocument, RepRoutePlan } from "@/lib/types";
 import { generateRepRoute } from "@/lib/route-engine";
 import { getStoresForRep, getRoleForRep } from "@/lib/repStores";
@@ -38,14 +39,19 @@ export async function POST(request: NextRequest) {
     const body = await request.json().catch(() => ({}));
     const repCodes: string[] | undefined = body.repCodes;
 
-    const [allReps, allStores, callCycleTypes, settings, visitRoles, allChannels] = await Promise.all([
+    const [allReps, storeList, callCycleTypes, settings, visitRoles, allChannels, overrides] = await Promise.all([
       getReps(),
       getStores(),
       getCallCycleTypes(),
       getSettings(),
       getVisitRoles(),
       getChannels(),
+      getStoreOverrides(),
     ]);
+    // Closed stores and channels nobody calls on never enter a cycle, for any
+    // visit role. One rule (lib/routable.ts), shared with capacity, Data Health
+    // and the not-in-cycle list, so none of them can disagree with the routes.
+    const allStores = routableStores({ stores: storeList, channels: allChannels, overrides });
     const outlierRadiusKm = settings.outlierRadiusKm;
 
     // How many calls a day this run should aim for.

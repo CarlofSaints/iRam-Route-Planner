@@ -156,6 +156,9 @@ export async function POST(request: NextRequest) {
           name: channelName,
           frequency: "monthly",
           duration: 30,
+          // A store row named a channel nobody had set up yet.
+          source: "store_upload",
+          sourceAt: new Date().toISOString(),
         };
         channelMap.set(channelKey(channelName), ch);
         channelsToSave.push(ch);

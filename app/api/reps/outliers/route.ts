@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getReps, getStores, getChannels, getSettings, getVisitRoles } from "@/lib/data";
+import { getReps, getStores, getChannels, getSettings, getVisitRoles, getStoreOverrides } from "@/lib/data";
+import { routableStores } from "@/lib/routable";
 import { computeOutliers } from "@/lib/outliers";
 import { requireSession } from "@/lib/auth";
 
@@ -19,7 +20,10 @@ export async function GET(request: NextRequest) {
     const parsed = param != null ? Number(param) : NaN;
     const radiusKm = !isNaN(parsed) && parsed > 0 ? Math.round(parsed) : settings.outlierRadiusKm;
 
-    const result = computeOutliers(reps, stores, radiusKm, visitRoles, channels);
+    // A closed store, or one in a channel nobody calls on, is never driven to,
+    // so how far it sits from the rep's patch is not worth flagging.
+    const overrides = await getStoreOverrides();
+    const result = computeOutliers(reps, routableStores({ stores, channels, overrides }), radiusKm, visitRoles, channels);
     const channelName = new Map(channels.map((c) => [c.id, c.name]));
     const storeById = new Map(stores.map((s) => [s.id, s]));
 
