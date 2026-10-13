@@ -12,6 +12,7 @@ import { explainCapacity } from "../lib/capacityExplain";
 import { computeCapacity } from "../lib/capacity";
 import { Rep, Store, RoutePlanDocument, RepRoutePlan, RouteDayPlan, DayLabel, WeekLabel } from "../lib/types";
 
+
 let passed = 0;
 let failed = 0;
 function check(label: string, actual: unknown, expected: unknown) {
@@ -63,10 +64,10 @@ function planFrom(start: { lat: number; lng: number }, days: RouteDayPlan[], una
   };
 }
 
-function run(r: Rep, plan: RepRoutePlan) {
+function run(r: Rep, plan: RepRoutePlan, book: Store[] = stores) {
   const doc = { id: "d", generatedAt: plan.generatedAt, generatedBy: "", repPlans: [plan], config: { useGoogleMaps: false, defaultStartTime: "08:00" } } as RoutePlanDocument;
-  const row = computeCapacity([r], stores, doc).reps[0];
-  return explainCapacity(r, row, stores, plan, doc.generatedAt, 20);
+  const row = computeCapacity([r], book, doc).reps[0];
+  return explainCapacity(r, row, book, plan, doc.generatedAt, 20);
 }
 
 console.log("\n1. Home 1 200 km from every store");
@@ -79,8 +80,10 @@ console.log("\n1. Home 1 200 km from every store");
   check("start reported as home", e.start.source, "home");
   check("typical distance is over 1 000 km", (e.start.medianKmToStores ?? 0) > 1000, true);
   check("overrun NOT blamed on a calls-per-day target", e.causes.some((c) => c.kind === "overrun"), false);
-  check("missed visits counted per visit, not per store", e.causes.find((c) => c.kind === "unassigned")?.title, "3 visits could not be scheduled");
-  check("S0 missed twice", e.stores.find((s) => s.storeId === "S0")?.missed, 2);
+  check("gap counted from each store's rhythm: 12 asked, 1 placed", e.route.gapVisits, 11);
+  check("gap named in the causes", e.causes.find((c) => c.kind === "not_on_route")?.title, "11h of visits a month (11 visits) are not on the route");
+  check("S0 missed twice on the plan's list", e.stores.find((s) => s.storeId === "S0")?.missed, 2);
+  check("S0 reason said plainly", e.stores.find((s) => s.storeId === "S0")?.notOnRouteReason, "Did not fit in the working days");
   check("the sum adds up", e.maths.scheduledHours, Math.round((e.maths.visitHours + e.maths.travelHours) * 10) / 10);
 }
 
@@ -94,8 +97,10 @@ console.log("\n2. Home corrected on the record but route not regenerated");
 
 console.log("\n3. A healthy local rep");
 {
-  const e = run(rep(BELLVILLE), planFrom(BELLVILLE, [day("Wk1", "Monday", ["S0", "S1", "S2"], 60)]));
+  const weeks: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
+  const e = run(rep(BELLVILLE), planFrom(BELLVILLE, weeks.map((w) => day(w, "Monday", ["S0", "S1", "S2"], 60))));
   check("no causes", e.causes.map((c) => c.kind), []);
+  check("nothing missing from the route", e.route.gapHours, 0);
 }
 
 console.log("\n4. No home GPS: the plan starts on the store centroid");
@@ -110,6 +115,30 @@ console.log("\n5. A real calls-per-day target that overruns");
 {
   const e = run(rep(BELLVILLE), planFrom(BELLVILLE, [day("Wk1", "Monday", ["S0", "S1", "S2"], 60, { overrunMinutes: 90 })], [], 8));
   check("overrun named with the target", e.causes.find((c) => c.kind === "overrun")?.detail.startsWith("The plan was built to 8 calls a day."), true);
+}
+
+console.log("\n6. Book far over the hours, but the grid shows under 100% (two daily 8h stores, one with no GPS)");
+{
+  const mk = (id: string, gps: boolean) => ({
+    id, placeId: id, name: `MAKRO LIQUOR WONDERBOOM - ${id}`, channelId: "ch", repCode: "R1",
+    gpsLat: gps ? String(BELLVILLE.lat) : "", gpsLng: gps ? String(BELLVILLE.lng) : "",
+    monthlySales: 0, frequency: "daily", duration: 480, dayOfWeek: "", weekNumber: "",
+  }) as Store;
+  const book = [mk("M16L", true), mk("M81L", false)];
+  const weeks: WeekLabel[] = ["Wk1", "Wk2", "Wk3", "Wk4"];
+  const days: DayLabel[] = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const plan = planFrom(BELLVILLE, weeks.flatMap((w) => days.map((d) => day(w, d, ["M16L"], 0, { totalVisitTime: 480, overCapacity: false }))));
+  plan.stats.unassignedStores = [{ storeId: "M81L", storeName: "M81L", reason: "Missing or invalid GPS coordinates" }];
+  const e = run(rep(BELLVILLE), plan, book);
+  check("book is 320h", e.route.bookVisitHours, 320);
+  check("route holds 160h", e.route.routedVisitHours, 160);
+  check("all 20 of the GPS-less store's visits are missing, not the 1 the plan lists", e.stores.find((s) => s.storeId === "M81L")?.notOnRoute, 20);
+  check("the gap is the FIRST cause", e.causes[0]?.kind, "not_on_route");
+  check("it says why the grid looks fine", e.causes[0]?.title, "The grid shows 94% only because 160h of visits are not on the route");
+  check("fix names the store needing GPS", e.causes[0]?.fix[0], "Give these stores a GPS on the Stores page: MAKRO LIQUOR WONDERBOOM - M81L.");
+  check("book cause gives the per-day figure", e.causes.find((c) => c.kind === "book_too_big")?.detail.includes("16h of visits for every working day, against a 8.5h day"), true);
+  check("duplicate check comes straight after the gap, before fixing the GPS", e.causes[1]?.kind, "possible_duplicate");
+  check("says twice", e.causes[1]?.title.startsWith("Possibly the same store twice"), true);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);
