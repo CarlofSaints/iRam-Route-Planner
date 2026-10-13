@@ -110,8 +110,60 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
                   <p className="mt-2 text-gray-700">
                     {m.scheduledHours.toFixed(1)} &divide; {m.availableHours.toFixed(0)} ={" "}
                     <span className={`font-semibold ${pct > 100 ? "text-red-700" : "text-gray-900"}`}>{pct}%</span>.
-                    {" "}The stores on their own ask for {m.bookVisitHours.toFixed(0)}h of visits a month, before driving.
                   </p>
+                </section>
+              )}
+
+              {/* The grid counts the ROUTE; the red "stores need Nx their
+                  hours" warning counts the STORES. This is the bridge, so the
+                  two numbers never look like they contradict each other. */}
+              {data.hasRoute && data.route && (
+                <section>
+                  <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-2">
+                    What the stores ask for vs what is on the route, per month
+                  </h3>
+                  <table className="w-full max-w-xl text-sm">
+                    <tbody className="divide-y divide-gray-100">
+                      <tr>
+                        <td className="py-1.5 text-gray-600">
+                          Visits the stores ask for <span className="text-gray-400">(frequency &times; visit length)</span>
+                        </td>
+                        <td className={`py-1.5 text-right font-mono ${data.route.bookVisitHours > m.availableHours ? "font-semibold text-red-700" : ""}`}>
+                          {data.route.bookVisitHours.toFixed(1)}h
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 text-gray-600">Visits on the route <span className="text-gray-400">(what the % above counts)</span></td>
+                        <td className="py-1.5 text-right font-mono">{data.route.routedVisitHours.toFixed(1)}h</td>
+                      </tr>
+                      <tr>
+                        <td className="py-1.5 font-medium text-gray-800">
+                          Not on the route ({data.route.gapVisits} visit{data.route.gapVisits === 1 ? "" : "s"})
+                        </td>
+                        <td className={`py-1.5 text-right font-mono font-medium ${data.route.gapHours > 0 ? "text-amber-700" : ""}`}>
+                          {data.route.gapHours.toFixed(1)}h
+                        </td>
+                      </tr>
+                      {data.route.byReason.map((g) => (
+                        <tr key={g.reason}>
+                          <td className="py-1 pl-4 text-xs text-gray-600">
+                            {g.reason}: {g.visits} visit{g.visits === 1 ? "" : "s"}
+                            <span className="block text-gray-400">{g.stores.join(", ")}</span>
+                          </td>
+                          <td className="py-1 text-right font-mono text-xs text-amber-700">{g.hours.toFixed(1)}h</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                  {data.route.gapHours > 0 && (
+                    <p className="mt-2 text-gray-700">
+                      The percentage only counts what is on the route. With every visit on it, this rep would need{" "}
+                      <span className="font-semibold">
+                        {Math.round(((m.scheduledHours + data.route.gapHours) / m.availableHours) * 100)}%
+                      </span>{" "}
+                      of their hours, before any extra driving.
+                    </p>
+                  )}
                 </section>
               )}
 
@@ -158,8 +210,9 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
                           <th className="px-3 py-2 text-right">From start</th>
                           <th className="px-3 py-2 text-left">Frequency</th>
                           <th className="px-3 py-2 text-right">Visit</th>
-                          <th className="px-3 py-2 text-right">Scheduled</th>
-                          <th className="px-3 py-2 text-left">Not scheduled</th>
+                          <th className="px-3 py-2 text-right">Hours/mo</th>
+                          <th className="px-3 py-2 text-right">On route</th>
+                          <th className="px-3 py-2 text-left">Not on route</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-gray-100">
@@ -171,11 +224,12 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
                             </td>
                             <td className="px-3 py-1.5 text-gray-600">{s.frequency}</td>
                             <td className="px-3 py-1.5 text-right text-gray-600">{s.durationMin} min</td>
+                            <td className="px-3 py-1.5 text-right font-mono text-gray-600">{s.hoursPerMonth}h</td>
                             <td className="px-3 py-1.5 text-right text-gray-600">
                               {s.scheduled} of {Math.round(s.callsPerMonth)}
                             </td>
                             <td className="px-3 py-1.5 text-amber-700">
-                              {s.missed > 0 ? `${s.missed} (${s.missedReason})` : ""}
+                              {s.notOnRoute > 0 ? `${s.notOnRoute}: ${s.notOnRouteReason}` : ""}
                             </td>
                           </tr>
                         ))}
