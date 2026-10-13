@@ -80,26 +80,28 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
                 </p>
               ) : (
                 <section>
-                  <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-2">The sum</h3>
+                  <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-2">
+                    The sum, per month <span className="normal-case tracking-normal">(one 4-week cycle, {m.workingDays} working days)</span>
+                  </h3>
                   <table className="w-full max-w-md text-sm">
                     <tbody className="divide-y divide-gray-100">
                       <tr>
-                        <td className="py-1.5 text-gray-600">In-store time scheduled</td>
+                        <td className="py-1.5 text-gray-600">In-store time scheduled this month</td>
                         <td className="py-1.5 text-right font-mono">{m.visitHours.toFixed(1)}h</td>
                       </tr>
                       <tr>
-                        <td className="py-1.5 text-gray-600">Driving</td>
+                        <td className="py-1.5 text-gray-600">Driving this month</td>
                         <td className={`py-1.5 text-right font-mono ${m.travelHours > m.visitHours ? "font-semibold text-red-700" : ""}`}>
                           {m.travelHours.toFixed(1)}h
                         </td>
                       </tr>
                       <tr>
-                        <td className="py-1.5 font-medium text-gray-800">Total</td>
+                        <td className="py-1.5 font-medium text-gray-800">Total for the month</td>
                         <td className="py-1.5 text-right font-mono font-medium">{m.scheduledHours.toFixed(1)}h</td>
                       </tr>
                       <tr>
                         <td className="py-1.5 text-gray-600">
-                          Available ({m.workingHoursPerDay}h &times; {m.workingDays} days)
+                          Available this month ({m.workingHoursPerDay}h &times; {m.workingDays} days)
                         </td>
                         <td className="py-1.5 text-right font-mono">{m.availableHours.toFixed(0)}h</td>
                       </tr>
@@ -108,7 +110,7 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
                   <p className="mt-2 text-gray-700">
                     {m.scheduledHours.toFixed(1)} &divide; {m.availableHours.toFixed(0)} ={" "}
                     <span className={`font-semibold ${pct > 100 ? "text-red-700" : "text-gray-900"}`}>{pct}%</span>.
-                    {" "}The stores on their own ask for {m.bookVisitHours.toFixed(0)}h of visits a cycle, before driving.
+                    {" "}The stores on their own ask for {m.bookVisitHours.toFixed(0)}h of visits a month, before driving.
                   </p>
                 </section>
               )}
@@ -185,7 +187,7 @@ export default function CapacityWhyModal({ repCode, onClose }: { repCode: string
 
               {data.days.length > 0 && (
                 <section>
-                  <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-2">Day by day</h3>
+                  <h3 className="text-xs uppercase tracking-wider text-gray-400 mb-2">Day by day, all {data.days.length} working days of the month</h3>
                   <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-lg">
                     <table className="w-full text-xs">
                       <thead className="bg-gray-50 text-gray-500 sticky top-0">
