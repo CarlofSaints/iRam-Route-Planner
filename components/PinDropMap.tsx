@@ -120,18 +120,19 @@ export default function PinDropMap({
   const round = (n: number) => Math.round(n * 1e6) / 1e6;
 
   return (
-    <div className="fixed inset-0 z-[2000] bg-black/40 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[2000] bg-black/40 flex items-center justify-center p-2 sm:p-4">
       <div className="bg-white rounded-xl shadow-2xl w-full max-w-4xl overflow-hidden flex flex-col max-h-[90vh]">
         <div className="px-5 py-3 border-b border-gray-100">
           <div className="font-semibold text-gray-900">Drop a pin on {storeName}</div>
           <div className="text-xs text-gray-500">
-            Click the map to place it, then drag to fine-tune.
+            Tap or click the map to place it, then drag to fine-tune.
             {nearby.length > 0 && ` The faint dots are this rep's other ${nearby.length} stores.`}
           </div>
         </div>
 
-        <div className="flex-1 min-h-[420px]">
-          <MapContainer center={centre} zoom={zoom} style={{ height: "100%", width: "100%", minHeight: 420 }}>
+        {/* 420px fixed pushed "Use this location" off a phone screen; 45vh keeps it visible. */}
+        <div className="flex-1 min-h-[45vh] sm:min-h-[420px]">
+          <MapContainer center={centre} zoom={zoom} className="h-full w-full min-h-[45vh] sm:min-h-[420px]">
             <TileLayer
               attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
               url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
@@ -175,7 +176,7 @@ export default function PinDropMap({
               <span className="text-gray-500 ml-3">Longitude</span> {pin.lng}
             </span>
           ) : (
-            <span className="text-sm text-gray-400">Click the map to place the pin</span>
+            <span className="text-sm text-gray-400">Tap the map to place the pin</span>
           )}
 
           {/* The same rule the typed boxes use, so a pin dropped in the sea off
