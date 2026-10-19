@@ -70,6 +70,8 @@ function AppShell({ children }: { children: React.ReactNode }) {
   // Auto-expand Control Centre if current path matches a child
   const ccChildActive = CONTROL_CENTRE_NAV.some((item) => pathname === item.href);
   const [ccOpen, setCcOpen] = useState(ccChildActive);
+  // Phones only: the sidebar is a slide-in drawer below the md breakpoint.
+  const [navOpen, setNavOpen] = useState(false);
 
   // Keep in sync when pathname changes
   if (ccChildActive && !ccOpen) setCcOpen(true);
@@ -82,9 +84,10 @@ function AppShell({ children }: { children: React.ReactNode }) {
   if (isLogin) return <>{children}</>;
 
   return (
-    <div className="flex h-screen overflow-hidden">
+    <div className="flex h-dvh overflow-hidden">
+      {navOpen && <div className="fixed inset-0 z-[1400] bg-black/40 md:hidden" onClick={() => setNavOpen(false)} />}
       {/* Sidebar */}
-      <aside className="w-64 bg-iram-dark text-white flex flex-col flex-shrink-0">
+      <aside className={`fixed inset-y-0 left-0 z-[1500] transition-transform md:static md:translate-x-0 ${navOpen ? "translate-x-0" : "-translate-x-full"} w-64 bg-iram-dark text-white flex flex-col flex-shrink-0`}>
         {/* Logo */}
         <div className="p-4 border-b border-gray-700 flex items-center gap-3">
           <Image src="/iram-logo.png" alt="iRam" width={36} height={36} className="rounded-lg" />
@@ -183,8 +186,19 @@ function AppShell({ children }: { children: React.ReactNode }) {
         </div>
       </aside>
 
-      {/* Main */}
-      <main className="flex-1 overflow-auto">{children}</main>
+      <div className="flex-1 flex flex-col min-w-0">
+        <header className="md:hidden flex items-center gap-3 px-3 py-2 bg-white border-b border-gray-200">
+          <button onClick={() => setNavOpen(true)} aria-label="Open menu" className="p-2 -ml-1 text-gray-700">
+            <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" d="M4 6h16M4 12h16M4 18h16" />
+            </svg>
+          </button>
+          <Image src="/iram-logo.png" alt="iRam" width={28} height={28} className="rounded" />
+          <span className="font-semibold text-sm text-gray-900">iRam</span>
+        </header>
+        {/* Main */}
+        <main className="flex-1 overflow-auto">{children}</main>
+      </div>
     </div>
   );
 }
