@@ -316,7 +316,9 @@ export interface Store {
   id: string;
   placeId: string;
   name: string;
-  channelId: string;
+  channelId: string; // the CLIENT channel: drives frequency, duration and "called on"
+  /** Field Goose's channel name for this store, from its stores export. A label only: nothing routes on it. */
+  fgChannel?: string;
   repCode: string; // primary rep — the one routing, capacity and the map work off
   /**
    * The non-primary rep calling on this store, one per visit role, keyed by

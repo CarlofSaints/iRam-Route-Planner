@@ -19,6 +19,7 @@ import type { SortValue } from "@/lib/tableSort";
 const COLUMN_DEFAULTS: Record<string, number> = {
   placeId: 110,
   name: 220,
+  fgChannel: 130,
   channel: 150,
   province: 120,
   region: 120,
@@ -36,7 +37,8 @@ const COLUMN_DEFAULTS: Record<string, number> = {
 const COLUMN_LABEL: Record<string, string> = {
   placeId: "Place ID",
   name: "Store Name",
-  channel: "Channel",
+  fgChannel: "FG Channel",
+  channel: "Client Channel",
   province: "Province",
   region: "Region",
   lat: "Latitude",
@@ -410,6 +412,7 @@ export default function StoresPage() {
   const accessors: Record<string, (s: Store) => SortValue> = {
     placeId: (s) => s.placeId,
     name: (s) => s.name,
+    fgChannel: (s) => s.fgChannel?.trim() || null,
     channel: (s) => channelMap.get(s.channelId)?.name || s.channelId || null,
     province: (s) => s.province?.trim() || null,
     region: (s) => s.region?.trim() || null,
@@ -497,6 +500,7 @@ export default function StoresPage() {
       const header = [
         "PLACE ID",
         "PLACE NAME",
+        "FG CHANNEL",
         "CHANNEL",
         "PROVINCE",
         "REGION",
@@ -533,6 +537,7 @@ export default function StoresPage() {
         rows.push([
           s.placeId || "",
           s.name || "",
+          s.fgChannel?.trim() || "",
           channelMap.get(s.channelId)?.name || s.channelId || "",
           s.province?.trim() || "",
           s.region?.trim() || "",
@@ -587,7 +592,7 @@ export default function StoresPage() {
           : [["", "None. This is every store."]]),
         [],
         ["Sending this file back"],
-        ["", "Import Excel on the Stores page reads PLACE ID, PLACE NAME, CHANNEL, PROVINCE, REGION, GPS LATITUDE, GPS LONGITUDE and STATUS: store details only. It never reads a rep, visit role or team column, so the personnel columns can be wrong, or deleted entirely, without any effect. Correcting GPS LATITUDE and GPS LONGITUDE and importing here is the bulk way to fix the stores listed under GPS PROBLEM."],
+        ["", "Import Excel on the Stores page reads PLACE ID, PLACE NAME, FG CHANNEL, CHANNEL, PROVINCE, REGION, GPS LATITUDE, GPS LONGITUDE and STATUS: store details only. It never reads a rep, visit role or team column, so the personnel columns can be wrong, or deleted entirely, without any effect. Correcting GPS LATITUDE and GPS LONGITUDE and importing here is the bulk way to fix the stores listed under GPS PROBLEM."],
         ["", "It updates existing stores only, matched on PLACE ID, and it will not create a channel. A channel name that matches nothing is reported and that store keeps the channel it has. Rows whose PLACE ID is not already in the system are listed back, not created."],
         ["", "A column you DELETE from this file is left untouched on every store. A column you keep but leave BLANK clears that field, which is how a wrong coordinate is removed in bulk."],
         ["", "STATUS is the exception: type Closed to close a store, and a BLANK status cell changes nothing. A closed store is left out of every call cycle until it is reopened."],
@@ -691,7 +696,7 @@ export default function StoresPage() {
 
   /** The columns on screen, left to right. */
   const visibleColumns = [
-    "placeId", "name", "channel", "province", "region", "lat", "lng", "rep", "status",
+    "placeId", "name", "fgChannel", "channel", "province", "region", "lat", "lng", "rep", "status",
     "frequency", "duration", "day", "week", ...(onlyUnrouted ? ["why"] : []), "actions",
   ];
 
@@ -965,6 +970,8 @@ export default function StoresPage() {
                     <td className={`${td} font-medium truncate ${closed ? "text-gray-400 line-through decoration-gray-300" : "text-gray-900"}`} title={store.name}>
                       {store.name}
                     </td>
+                    {/* Read-only in both modes: it only ever comes from a Field Goose file. */}
+                    <td className={`${td} text-gray-500 truncate`} title={store.fgChannel}>{store.fgChannel || "-"}</td>
 
                     {isEditing ? (
                       <>
