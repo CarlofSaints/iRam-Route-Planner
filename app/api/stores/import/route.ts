@@ -79,6 +79,12 @@ export async function POST(request: NextRequest) {
     const LAT_COLS = ["GPS LATITUDE", "GPS_LATITUDE", "LATITUDE"] as const;
     const LNG_COLS = ["GPS LONGITUDE", "GPS_LONGITUDE", "LONGITUDE"] as const;
     const STATUS_COLS = ["STATUS", "STORE STATUS"] as const;
+    const FG_CHANNEL_COLS = ["FG CHANNEL"] as const;
+    // A Field Goose stores export: its "Channel" is FG's own channel name, so it
+    // goes to fgChannel and never moves a store's client channel (or its rhythm).
+    const isFieldGoose = hasHeader("STORE CODE") && !hasHeader("PLACE ID", "STORE ID");
+    const channelCols = isFieldGoose ? [] : CHANNEL_COLS;
+    const fgChannelCols = isFieldGoose ? CHANNEL_COLS : FG_CHANNEL_COLS;
 
     if (!hasHeader(...ID_COLS)) {
       return NextResponse.json(
@@ -102,7 +108,8 @@ export async function POST(request: NextRequest) {
      */
     const present = {
       name: hasHeader(...NAME_COLS),
-      channel: hasHeader(...CHANNEL_COLS),
+      channel: channelCols.length > 0 && hasHeader(...channelCols),
+      fgChannel: hasHeader(...fgChannelCols),
       province: hasHeader(...PROVINCE_COLS),
       region: hasHeader(...REGION_COLS),
       // Latitude and longitude move as a pair. Writing one without the other
@@ -115,7 +122,7 @@ export async function POST(request: NextRequest) {
     const gpsHalfPresent =
       !present.gps && (hasHeader(...LAT_COLS) || hasHeader(...LNG_COLS));
 
-    if (!present.name && !present.channel && !present.province && !present.region && !present.gps && !present.status) {
+    if (!present.name && !present.channel && !present.fgChannel && !present.province && !present.region && !present.gps && !present.status) {
       return NextResponse.json(
         {
           error: `This file has a PLACE ID column but none of the columns this page imports (${IMPORTABLE.join(
@@ -154,7 +161,7 @@ export async function POST(request: NextRequest) {
       if (!channelByName.has(k)) channelByName.set(k, c);
     }
 
-    const changed = { name: 0, channel: 0, province: 0, region: 0, gps: 0, gpsCleared: 0, closed: 0, reopened: 0 };
+    const changed = { name: 0, channel: 0, fgChannel: 0, province: 0, region: 0, gps: 0, gpsCleared: 0, closed: 0, reopened: 0 };
     const badStatus: string[] = [];
     // Named, not just counted: closing a store takes it out of every call
     // cycle, and a number alone cannot be checked against what was meant.
@@ -204,7 +211,7 @@ export async function POST(request: NextRequest) {
       }
 
       if (present.channel) {
-        const channelName = col(row, ...CHANNEL_COLS);
+        const channelName = col(row, ...channelCols);
         if (!channelName) {
           blankRequired.push(`${placeId} — blank CHANNEL, channel left unchanged`);
         } else {
@@ -223,6 +230,15 @@ export async function POST(request: NextRequest) {
             changed.channel++;
             touched = true;
           }
+        }
+      }
+
+      if (present.fgChannel) {
+        const fgChannel = col(row, ...fgChannelCols);
+        if (fgChannel !== (store.fgChannel || "")) {
+          store.fgChannel = fgChannel || undefined;
+          changed.fgChannel++;
+          touched = true;
         }
       }
 
@@ -291,7 +307,7 @@ export async function POST(request: NextRequest) {
     }
 
     const totalChanges =
-      changed.name + changed.channel + changed.province + changed.region + changed.gps +
+      changed.name + changed.channel + changed.fgChannel + changed.province + changed.region + changed.gps +
       changed.closed + changed.reopened;
     if (totalChanges > 0) await saveStores(stores);
 
@@ -301,7 +317,7 @@ export async function POST(request: NextRequest) {
       actorName: session.name || "Unknown",
       summary:
         `Stores-only import of ${file.name}: ${matched} of ${rows.length} rows matched, ` +
-        `${totalChanges} field changes (${changed.gps} GPS, ${changed.channel} channel, ` +
+        `${totalChanges} field changes (${changed.gps} GPS, ${changed.channel} channel, ${changed.fgChannel} FG channel, ` +
         `${changed.name} name, ${changed.province} province, ${changed.region} region, ` +
         `${changed.closed} closed, ${changed.reopened} reopened). ` +
         `No rep or role data read.`,
@@ -329,6 +345,7 @@ export async function POST(request: NextRequest) {
       columnsRead: [
         present.name && "PLACE NAME",
         present.channel && "CHANNEL",
+        present.fgChannel && (isFieldGoose ? "Field Goose Channel → FG CHANNEL" : "FG CHANNEL"),
         present.province && "PROVINCE",
         present.region && "REGION",
         present.gps && "GPS LATITUDE / GPS LONGITUDE",
@@ -336,7 +353,8 @@ export async function POST(request: NextRequest) {
       ].filter(Boolean) as string[],
       columnsAbsent: [
         !present.name && "PLACE NAME",
-        !present.channel && "CHANNEL",
+        !present.channel && (isFieldGoose ? "CHANNEL (a Field Goose file only sets FG CHANNEL)" : "CHANNEL"),
+        !present.fgChannel && "FG CHANNEL",
         !present.province && "PROVINCE",
         !present.region && "REGION",
         !present.gps && "GPS LATITUDE / GPS LONGITUDE",

@@ -23,6 +23,7 @@ type ImportResult = {
   changed?: {
     name: number;
     channel: number;
+    fgChannel?: number;
     province: number;
     region: number;
     gps: number;
@@ -101,7 +102,8 @@ export default function StoreImportModal({
   const changeLines = changed
     ? ([
         ["GPS coordinates", changed.gps],
-        ["Channel", changed.channel],
+        ["Client channel", changed.channel],
+        ["FG channel", changed.fgChannel ?? 0],
         ["Store name", changed.name],
         ["Province", changed.province],
         ["Region", changed.region],
@@ -455,7 +457,8 @@ export default function StoreImportModal({
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-gray-500">
               <span>PLACE ID (or Field Goose STORE CODE): matches the store, required</span>
               <span>PLACE NAME</span>
-              <span>CHANNEL: must already exist</span>
+              <span>CHANNEL (client channel): must already exist</span>
+              <span>FG CHANNEL. In a Field Goose stores export, its Channel column fills FG CHANNEL and never the client channel</span>
               <span>PROVINCE</span>
               <span>REGION</span>
               <span>GPS LATITUDE + GPS LONGITUDE</span>
