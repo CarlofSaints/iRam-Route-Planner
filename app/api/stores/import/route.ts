@@ -70,7 +70,8 @@ export async function POST(request: NextRequest) {
     };
 
     // Accepted spellings, in one place so the presence test and the read agree.
-    const ID_COLS = ["PLACE ID", "STORE ID"] as const;
+    // "STORE CODE" is the Field Goose stores export; its codes are our place IDs.
+    const ID_COLS = ["PLACE ID", "STORE ID", "STORE CODE"] as const;
     const NAME_COLS = ["PLACE NAME", "STORE NAME"] as const;
     const CHANNEL_COLS = ["CHANNEL", "CHANNEL NAME"] as const;
     const PROVINCE_COLS = ["PROVINCE"] as const;
@@ -83,7 +84,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            "No PLACE ID column. That column is how a row is matched to a store, so nothing can be imported without it.",
+            "No PLACE ID (or Field Goose STORE CODE) column. That column is how a row is matched to a store, so nothing can be imported without it.",
           fileHeaders,
         },
         { status: 400 }

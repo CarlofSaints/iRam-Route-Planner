@@ -453,7 +453,7 @@ export default function StoreImportModal({
           <div className="mt-5 bg-gray-50 border border-gray-100 rounded-xl p-4">
             <h4 className="text-xs font-semibold text-gray-700 mb-2">What this import reads</h4>
             <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] text-gray-500">
-              <span>PLACE ID: matches the store, required</span>
+              <span>PLACE ID (or Field Goose STORE CODE): matches the store, required</span>
               <span>PLACE NAME</span>
               <span>CHANNEL: must already exist</span>
               <span>PROVINCE</span>
