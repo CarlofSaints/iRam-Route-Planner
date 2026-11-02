@@ -582,6 +582,7 @@ export function buildManagerDigestEmail(input: ManagerDigestEmailInput): { subje
   const n = input.reps.length;
   const stores = input.reps.reduce((sum, r) => sum + r.activeStores, 0);
   const storeWord = stores === 1 ? "store" : "stores";
+  const accountUrl = `${resolveAppUrl()}/account`;
 
   const body = `
             <tr>
@@ -611,7 +612,8 @@ export function buildManagerDigestEmail(input: ManagerDigestEmailInput): { subje
             <tr>
               <td style="padding:22px 32px 0 32px;font-family:Helvetica,Arial,sans-serif;font-size:13px;line-height:1.6;color:${BRAND.grey};">
                 "Reminders" is how many times we have already asked. All they need to do is sign in,
-                open Account, and tap "Use my current location" while standing at home. Anyone not
+                open Account (<a href="${accountUrl}" style="color:${BRAND.greenDark};">${accountUrl}</a>), and tap
+                "Use my current location" while standing at home. Anyone not
                 marked Emailed could not be written to, and needs sorting out on the Route Planner first.
               </td>
             </tr>
@@ -635,8 +637,10 @@ export function buildManagerDigestEmail(input: ManagerDigestEmailInput): { subje
         `  ${r.code.padEnd(10)} ${r.name.padEnd(28)} ${String(r.activeStores).padStart(4)} stores   ${r.timesReminded} reminder(s)   ${rowStatus(r)}`
     ),
     ``,
-    `Everyone marked Emailed has been written to directly with instructions. You are`,
-    `copied so you know who to ask about it. Anyone not marked Emailed could not be`,
+    `Everyone marked Emailed has been written to directly with instructions. All they`,
+    `need to do is sign in at ${accountUrl}`,
+    `and tap "Use my current location" at home. You are copied so you know who to`,
+    `ask about it. Anyone not marked Emailed could not be`,
     `written to and needs sorting out on the Route Planner first.`,
     ``,
     `Thanks,`,
