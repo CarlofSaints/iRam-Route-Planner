@@ -81,12 +81,40 @@ function FitToNearby({ nearby }: { nearby: NearbyStore[] }) {
   return null;
 }
 
+/**
+ * Opens where the phone is, like sharing a location on WhatsApp: the pin starts
+ * there and the person drags it to their house. Denied or no fix = the map just
+ * stays where it opened, no error, they can still tap to place.
+ */
+function StartAtMe({ onFound }: { onFound: (lat: number, lng: number) => void }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!navigator.geolocation) return;
+    let live = true;
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        if (!live) return;
+        map.setView([p.coords.latitude, p.coords.longitude], 17);
+        onFound(p.coords.latitude, p.coords.longitude);
+      },
+      () => {},
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [map]);
+  return null;
+}
+
 export default function PinDropMap({
   storeName,
   nearby,
   initial,
   onPick,
   onCancel,
+  startAtMe = false,
 }: {
   storeName: string;
   /** The rep's other stores, for context and for centring. */
@@ -94,6 +122,8 @@ export default function PinDropMap({
   initial: { lat: number; lng: number } | null;
   onPick: (lat: number, lng: number) => void;
   onCancel: () => void;
+  /** Ask the device where it is and start there. Only when no pin is saved yet. */
+  startAtMe?: boolean;
 }) {
   const [pin, setPin] = useState<{ lat: number; lng: number } | null>(initial);
 
@@ -125,7 +155,9 @@ export default function PinDropMap({
         <div className="px-5 py-3 border-b border-gray-100">
           <div className="font-semibold text-gray-900">Drop a pin on {storeName}</div>
           <div className="text-xs text-gray-500">
-            Tap or click the map to place it, then drag to fine-tune.
+            {startAtMe && !initial
+              ? "The map opens where you are now. Drag the pin onto your house, or tap the map to move it."
+              : "Tap or click the map to place it, then drag to fine-tune."}
             {nearby.length > 0 && ` The faint dots are this rep's other ${nearby.length} stores.`}
           </div>
         </div>
@@ -139,6 +171,9 @@ export default function PinDropMap({
             />
             <ClickToPlace onPlace={(lat, lng) => setPin({ lat: round(lat), lng: round(lng) })} />
             {!initial && <FitToNearby nearby={nearby} />}
+            {!initial && startAtMe && (
+              <StartAtMe onFound={(lat, lng) => setPin((cur) => cur ?? { lat: round(lat), lng: round(lng) })} />
+            )}
 
             {/* Context, not decoration: this is how you tell a plausible spot
                 from one that is thirty kilometres out. */}

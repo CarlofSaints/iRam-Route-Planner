@@ -480,6 +480,7 @@ export default function AccountPage() {
             <PinDropMap
               storeName="your home"
               nearby={[]}
+              startAtMe
               initial={
                 approx ??
                 (rep.hasCoordinates ? { lat: Number(rep.homeGpsLat), lng: Number(rep.homeGpsLng) } : null)
