@@ -229,6 +229,34 @@ export default function HomeAddressReminders() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canResend &&
+            (confirmResend ? (
+              <>
+                <button
+                  onClick={() => run(false, true)}
+                  disabled={busy !== ""}
+                  className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors disabled:opacity-50"
+                >
+                  {busy === "send" ? "Sending..." : `Yes, resend to ${mailableCount} rep${mailableCount === 1 ? "" : "s"} and their managers`}
+                </button>
+                <button
+                  onClick={() => setConfirmResend(false)}
+                  disabled={busy !== ""}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmResend(true)}
+                disabled={busy !== ""}
+                title="Send this week's reminder again, once, e.g. after the email was fixed. Reps who have set their home since are left out."
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Resend this week&apos;s reminders
+              </button>
+            ))}
           <button
             onClick={() => run(true)}
             disabled={busy !== ""}
@@ -402,34 +430,6 @@ export default function HomeAddressReminders() {
                 Send reminders now
               </button>
             )}
-            {canResend &&
-              (confirmResend ? (
-                <>
-                  <button
-                    onClick={() => run(false, true)}
-                    disabled={busy !== ""}
-                    className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors disabled:opacity-50"
-                  >
-                    {busy === "send" ? "Sending..." : `Yes, resend to ${mailableCount} rep${mailableCount === 1 ? "" : "s"} and their managers`}
-                  </button>
-                  <button
-                    onClick={() => setConfirmResend(false)}
-                    disabled={busy !== ""}
-                    className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                  >
-                    Cancel
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => setConfirmResend(true)}
-                  disabled={busy !== ""}
-                  title="Send this week's reminder again, once, e.g. after the email was fixed. Reps who have set their home since are left out."
-                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
-                >
-                  Resend this week&apos;s reminders
-                </button>
-              ))}
             <span className="text-xs text-gray-500">
               {status.schedule}
               {summaryText ? ` · summary to ${summaryText}` : ""}
