@@ -124,6 +124,8 @@ async function sendPaced(input: Parameters<typeof sendEmail>[0]) {
 interface RunOptions {
   trigger: "cron" | "manual";
   dryRun: boolean;
+  /** Re-send this week's batch past the once-a-week guard. Admin only, once per week. */
+  resend?: boolean;
   actor: string;
   actorName: string;
 }
@@ -169,10 +171,37 @@ async function runReminders(options: RunOptions) {
   // overlapping a manual send, finds the first one's record and stops.
   if (!options.dryRun) {
     const cutoff = Date.now() - MIN_GAP_MS;
-    const recent = (await getReminderRuns()).find(
+    const realRuns = (await getReminderRuns()).filter(
       (r) => !r.dryRun && !r.skippedReason && (r.sent > 0 || r.managersEmailed > 0) && Date.parse(r.startedAt) > cutoff
     );
-    if (recent) {
+    const recent = realRuns[0];
+    // A resend is the one way past the weekly guard, and only once: it re-sends a
+    // batch that went out this week, it does not start an extra week.
+    const resendRefused = !options.resend
+      ? null
+      : !recent
+        ? "Nothing went out this week, so there is nothing to resend. Use Send reminders now."
+        : realRuns.some((r) => r.resend)
+          ? `This week's batch was already resent. Nobody gets it a third time.`
+          : null;
+    if (resendRefused) {
+      const run = await finish({
+        trigger: options.trigger,
+        dryRun: false,
+        resend: true,
+        outstanding: plan.outstanding.length,
+        mailable: plan.mailable.length,
+        sent: 0,
+        failed: 0,
+        blocked: plan.blocked.length,
+        managersEmailed: 0,
+        summarySent: false,
+        settled: plan.settled.length,
+        skippedReason: resendRefused,
+      });
+      return { run, plan, failed: [] };
+    }
+    if (recent && !options.resend) {
       const run = await finish({
         trigger: options.trigger,
         dryRun: false,
@@ -197,10 +226,11 @@ async function runReminders(options: RunOptions) {
       // run record says nothing was sent, but the per-rep state saved every 20
       // does. Anyone mailed inside the window is left alone.
       const already = nextState[rep.repId];
-      if (already?.lastResult === "sent" && Date.parse(already.lastSentAt) > Date.now() - MIN_GAP_MS) continue;
+      if (!options.resend && already?.lastResult === "sent" && Date.parse(already.lastSentAt) > Date.now() - MIN_GAP_MS) continue;
       const { subject, html, text } = buildRepReminderEmail({
         name: rep.name,
-        timesReminded: rep.timesReminded,
+        // On a resend, today's send is already counted: word it as that same ask.
+        timesReminded: options.resend ? Math.max(0, rep.timesReminded - 1) : rep.timesReminded,
         activeStores: rep.activeStores,
         hasAddressWithoutGps: rep.hasAddressWithoutGps,
       });
@@ -213,7 +243,8 @@ async function runReminders(options: RunOptions) {
         nextState[rep.repId] = {
           repId: rep.repId,
           repCode: rep.code,
-          count: (prior?.count ?? 0) + 1,
+          // A resend is the same week's ask again, not one more reminder.
+          count: (prior?.count ?? 0) + (options.resend ? 0 : 1),
           firstSentAt: prior?.firstSentAt ?? now,
           lastSentAt: now,
           lastResult: "sent",
@@ -284,11 +315,12 @@ async function runReminders(options: RunOptions) {
     managersEmailed,
     summarySent,
     settled: plan.settled.length,
+    ...(options.resend ? { resend: true } : {}),
     ...(to.length ? {} : { error: "No REMINDER_SUMMARY_TO or RESEND_REPLY_TO set, so no summary was sent." }),
   });
 
   logActivity({
-    action: options.dryRun ? "Previewed home address reminders" : "Sent home address reminders",
+    action: options.dryRun ? "Previewed home address reminders" : options.resend ? "Resent home address reminders" : "Sent home address reminders",
     actor: options.actor,
     actorName: options.actorName,
     summary: options.dryRun
@@ -389,6 +421,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}));
     const dryRun = body?.dryRun === true;
+    const resend = !dryRun && body?.resend === true;
     if (!dryRun && !canSend(session.role)) {
       return NextResponse.json({ error: "Only an admin can send the reminders, because they go to every team." }, { status: 403 });
     }
@@ -396,6 +429,7 @@ export async function POST(request: NextRequest) {
     const { run, plan, failed } = await runReminders({
       trigger: "manual",
       dryRun,
+      resend,
       actor: session.email,
       actorName: session.name,
     });

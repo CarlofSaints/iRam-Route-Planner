@@ -31,7 +31,7 @@ interface OutstandingRep {
   lastRemindedAt: string | null;
 }
 
-type BlockReason = "no_email" | "no_login" | "no_manager";
+type BlockReason = "address_no_pin" | "no_email" | "no_login" | "no_manager";
 
 interface BlockedRep extends OutstandingRep {
   reason: BlockReason;
@@ -39,6 +39,7 @@ interface BlockedRep extends OutstandingRep {
 
 interface ReminderRun {
   id: string;
+  resend?: boolean;
   startedAt: string;
   trigger: "cron" | "manual";
   dryRun: boolean;
@@ -73,6 +74,7 @@ interface ReminderStatus {
 }
 
 const BLOCK_LABEL: Record<BlockReason, string> = {
+  address_no_pin: "Address given, won't pin: set GPS",
   no_email: "No email address",
   no_login: "No login yet",
   no_manager: "No team manager",
@@ -98,6 +100,7 @@ export default function HomeAddressReminders() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [confirmSend, setConfirmSend] = useState(false);
+  const [confirmResend, setConfirmResend] = useState(false);
 
   const load = useCallback(() => {
     fetch("/api/cron/home-address-reminder")
@@ -121,7 +124,7 @@ export default function HomeAddressReminders() {
 
   const summaryText = status?.summaryTo?.length ? status.summaryTo.join(" and ") : "";
 
-  const run = async (dryRun: boolean) => {
+  const run = async (dryRun: boolean, resend = false) => {
     setBusy(dryRun ? "preview" : "send");
     setMessage("");
     setError("");
@@ -129,13 +132,15 @@ export default function HomeAddressReminders() {
       const res = await fetch("/api/cron/home-address-reminder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dryRun }),
+        body: JSON.stringify({ dryRun, resend }),
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || `Run failed (${res.status})`);
       const r = data.run as ReminderRun;
       setMessage(
-        dryRun
+        r.skippedReason
+          ? `Nothing sent. ${r.skippedReason}`
+          : dryRun
           ? `Preview only. Nothing was sent to any rep. The summary of ${r.outstanding} outstanding rep${r.outstanding === 1 ? "" : "s"} went to ${
               summaryText || "nobody, because no summary address is set"
             }.`
@@ -144,6 +149,7 @@ export default function HomeAddressReminders() {
             }`
       );
       setConfirmSend(false);
+      setConfirmResend(false);
       load();
     } catch (err) {
       setError(String(err));
@@ -175,6 +181,12 @@ export default function HomeAddressReminders() {
 
   const { plan } = status;
   const mailableCount = plan.mailable.length;
+  // Same rule the server enforces: a real send this week, not yet resent.
+  const weekAgo = Date.now() - 6 * 24 * 60 * 60 * 1000;
+  const thisWeek = status.runs.filter(
+    (r) => !r.dryRun && !r.skippedReason && (r.sent > 0 || r.managersEmailed > 0) && Date.parse(r.startedAt) > weekAgo
+  );
+  const canResend = thisWeek.length > 0 && !thisWeek.some((r) => r.resend) && mailableCount > 0;
   const managerCount = plan.managerDigests.length;
 
   return (
@@ -217,6 +229,34 @@ export default function HomeAddressReminders() {
           )}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canResend &&
+            (confirmResend ? (
+              <>
+                <button
+                  onClick={() => run(false, true)}
+                  disabled={busy !== ""}
+                  className="bg-iram-green text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-iram-green-dark transition-colors disabled:opacity-50"
+                >
+                  {busy === "send" ? "Sending..." : `Yes, resend to ${mailableCount} rep${mailableCount === 1 ? "" : "s"} and their managers`}
+                </button>
+                <button
+                  onClick={() => setConfirmResend(false)}
+                  disabled={busy !== ""}
+                  className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setConfirmResend(true)}
+                disabled={busy !== ""}
+                title="Send this week's reminder again, once, e.g. after the email was fixed. Reps who have set their home since are left out."
+                className="px-4 py-2 border border-gray-300 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-50 transition-colors disabled:opacity-50"
+              >
+                Resend this week&apos;s reminders
+              </button>
+            ))}
           <button
             onClick={() => run(true)}
             disabled={busy !== ""}
@@ -412,7 +452,7 @@ export default function HomeAddressReminders() {
                       <>preview, {r.outstanding} outstanding, nothing sent</>
                     ) : (
                       <>
-                        {r.sent} emailed, {r.managersEmailed} manager{r.managersEmailed === 1 ? "" : "s"} copied
+                        {r.resend ? "resent: " : ""}{r.sent} emailed, {r.managersEmailed} manager{r.managersEmailed === 1 ? "" : "s"} copied
                         {r.failed > 0 ? `, ${r.failed} failed` : ""}
                         {r.settled > 0 ? `, ${r.settled} done since last run` : ""}
                       </>

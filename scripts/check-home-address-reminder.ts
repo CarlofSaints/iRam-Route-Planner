@@ -12,6 +12,7 @@
 import {
   classifyReps,
   hasRoutableHome,
+  hasRealAddress,
   hasUsableEmail,
   findRepLogin,
   parseRecipients,
@@ -427,6 +428,26 @@ const team = (over: Partial<Team> = {}): Team => ({
   const quiet = buildAdminSummaryEmail({ plan: empty, sent: 0, failed: [], dryRun: false, managersEmailed: 0, trigger: "cron" });
   ok("a week with nothing to do still produces a summary", quiet.subject.includes("0 outstanding"));
   ok("and does not claim a failure", !/failed to send/i.test(quiet.html));
+}
+
+// ── 7b. A rep who gave a real address is not emailed again (Carl, 2 Nov 2026) ──
+{
+  ok("a street address counts as real", hasRealAddress({ homeAddress: "12 Main Road, Soweto" }));
+  ok("a stand number counts as real", hasRealAddress({ homeAddress: "Stand no 644, next to the shop" }));
+  for (const junk of ["", "n/a", "-", "home", "Soweto", "1234567890"]) {
+    ok(`"${junk}" is not a real address`, !hasRealAddress({ homeAddress: junk }));
+  }
+  const teams = [team({ id: "t1", name: "REGION A", managerEmail: "manager.one@example.com" })];
+  const reps = [
+    rep({ id: "a", code: "A1", name: "Gave Address", email: "a@example.com", teamId: "t1", homeAddress: "12 Main Road, Soweto" }),
+    rep({ id: "b", code: "B1", name: "Typed Junk", email: "b@example.com", teamId: "t1", homeAddress: "n/a" }),
+  ];
+  const users = [user({ id: "ua", repId: "a" }), user({ id: "ub", repId: "b" })];
+  const plan = classifyReps({ reps, users, teams, stores: [], state: {} });
+  ok("a real address that won't pin is NOT emailed", !plan.mailable.some((m) => m.code === "A1"));
+  ok("it is held back as admin work, with its reason", plan.blocked.find((b) => b.code === "A1")?.reason === "address_no_pin");
+  ok("the manager still sees it", plan.managerDigests[0]?.reps.some((r) => r.code === "A1") === true);
+  ok("junk typed in the address box is still emailed", plan.mailable.some((m) => m.code === "B1"));
 }
 
 // ── 8. The switch, and who gets the summary ──────────────────────────────

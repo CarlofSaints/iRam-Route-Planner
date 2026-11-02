@@ -156,6 +156,17 @@ export function hasRoutableHome(rep: Rep): boolean {
   return parseRepHome(rep.homeGpsLat, rep.homeGpsLng) !== null;
 }
 
+/**
+ * A typed home address that reads like a real one: a street number plus words.
+ * Carl, 2 Nov 2026: a rep who has given us a real address has done their part
+ * and is not emailed again, even if it won't pin. Fixing the pin is admin work.
+ * "n/a", "-", "home", "Soweto" stay outstanding and keep being asked.
+ */
+export function hasRealAddress(rep: Pick<Rep, "homeAddress">): boolean {
+  const a = (rep.homeAddress || "").trim();
+  return a.length >= 8 && /\d/.test(a) && /[a-z]{3,}/i.test(a);
+}
+
 /** The same shape the Reps page uses, so both agree on an unusable address. */
 export function hasUsableEmail(rep: Pick<Rep, "email">): boolean {
   // Every domain label must be non-empty: "a@example.co.,za" split on the comma
@@ -275,7 +286,8 @@ export function classifyReps(input: ClassifyInput): ReminderPlan {
     const managerReachable = o.managerEmails.length > 0;
     if (!managerReachable) repsWithNoManagerContact++;
 
-    if (!hasUsableEmail(rep)) o.blockedReason = "no_email";
+    if (hasRealAddress(rep)) o.blockedReason = "address_no_pin";
+    else if (!hasUsableEmail(rep)) o.blockedReason = "no_email";
     else if (!findRepLogin(rep, users)) o.blockedReason = "no_login";
     // Carl's rule, 3 Sep 2026: nobody is chased unless their manager is chased
     // with them. An automated mail nobody is following up gets ignored.
@@ -664,6 +676,7 @@ export interface AdminSummaryInput {
 }
 
 export const BLOCK_REASON_LABEL: Record<ReminderBlockReason, string> = {
+  address_no_pin: "Gave an address that won't pin on the map: set their GPS on the Reps page",
   no_email: "No email address on file",
   no_login: "No login yet: create one on the Reps page",
   no_manager: "No team manager to copy: put them in a team on the Teams page",

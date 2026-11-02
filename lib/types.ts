@@ -436,7 +436,7 @@ export interface User {
  * `no_manager` is a rule, not a fault in the rep's record: nobody is chased
  * unless their team manager is copied on the same run.
  */
-export type ReminderBlockReason = "no_email" | "no_login" | "no_manager";
+export type ReminderBlockReason = "address_no_pin" | "no_email" | "no_login" | "no_manager";
 
 /** What has been asked of one rep, and how that went. */
 export interface ReminderState {
@@ -479,6 +479,8 @@ export interface ReminderRun {
   settled: number;
   /** Set when the run refused to do anything, e.g. the switch is off. */
   skippedReason?: string;
+  /** An admin re-sent the week's batch (e.g. after fixing the mail). Allowed once per week. */
+  resend?: boolean;
   /** Anything that went wrong at the run level rather than per rep. */
   error?: string;
 }
