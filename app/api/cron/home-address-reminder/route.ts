@@ -13,13 +13,14 @@ import {
 } from "@/lib/data";
 import { getSession, sessionHasPermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
-import { sendEmail } from "@/lib/welcomeEmail";
+import { sendEmail, getEmailLastEvent } from "@/lib/welcomeEmail";
 import {
   classifyReps,
   parseRecipients,
   buildRepReminderEmail,
   buildManagerDigestEmail,
   buildAdminSummaryEmail,
+  isUndelivered,
   type ReminderPlan,
 } from "@/lib/homeAddressReminder";
 import type { ReminderRun, ReminderStateMap } from "@/lib/types";
@@ -121,6 +122,20 @@ async function sendPaced(input: Parameters<typeof sendEmail>[0]) {
   return result;
 }
 
+/** Time for Resend to decide a mail's fate before we ask. */
+const DELIVERY_WAIT_MS = 5000;
+
+const UNDELIVERED_REASON =
+  "Not delivered: the mail server rejected this address, or Resend has it on its suppression list after an earlier bounce. Check the address is right.";
+
+async function lastEventPaced(id: string) {
+  const started = Date.now();
+  const event = await getEmailLastEvent(id);
+  const elapsed = Date.now() - started;
+  if (elapsed < SEND_INTERVAL_MS) await sleep(SEND_INTERVAL_MS - elapsed);
+  return event;
+}
+
 interface RunOptions {
   trigger: "cron" | "manual";
   dryRun: boolean;
@@ -164,6 +179,7 @@ async function runReminders(options: RunOptions) {
   const failed: { code: string; name: string; email: string; reason: string }[] = [];
   let sent = 0;
   let managersEmailed = 0;
+  let statusUnknown = 0;
   const nextState: ReminderStateMap = { ...state };
   const now = new Date().toISOString();
 
@@ -221,6 +237,7 @@ async function runReminders(options: RunOptions) {
 
   if (!options.dryRun) {
     let sinceSave = 0;
+    const accepted: { rep: (typeof plan.mailable)[number]; id: string }[] = [];
     for (const rep of plan.mailable) {
       // Belt and braces for a run that died part-way and was started again: its
       // run record says nothing was sent, but the per-rep state saved every 20
@@ -237,9 +254,11 @@ async function runReminders(options: RunOptions) {
       const result = await sendPaced({ to: rep.email, subject, html, text });
 
       const prior = nextState[rep.repId];
+      rep.notDelivered = false;
       if (!result.sent) rep.sendFailed = true;
       if (result.sent) {
         sent++;
+        if (result.id) accepted.push({ rep, id: result.id });
         nextState[rep.repId] = {
           repId: rep.repId,
           repCode: rep.code,
@@ -273,6 +292,28 @@ async function runReminders(options: RunOptions) {
       }
     }
 
+    // Saved before asking Resend, so a timeout here cannot lose who was mailed.
+    // shortcut: a bounce that lands after this check still reads as Emailed, a webhook would catch it.
+    await saveReminderState(nextState);
+    if (accepted.length) await sleep(DELIVERY_WAIT_MS);
+    for (const { rep, id } of accepted) {
+      const event = await lastEventPaced(id);
+      if (event === null) statusUnknown++;
+      if (event === null || !isUndelivered(event)) continue;
+      rep.notDelivered = true;
+      sent--;
+      failed.push({ code: rep.code, name: rep.name, email: rep.email, reason: UNDELIVERED_REASON });
+      const entry = nextState[rep.repId];
+      nextState[rep.repId] = {
+        ...entry,
+        // Same rule as a refused send: a mail that never arrived asked nobody anything.
+        count: options.resend ? entry.count : Math.max(0, entry.count - 1),
+        lastResult: "not_delivered",
+        lastError: UNDELIVERED_REASON,
+      };
+    }
+
+    const acceptedDigests: { digest: (typeof plan.managerDigests)[number]; id: string }[] = [];
     for (const digest of plan.managerDigests) {
       const { subject, html, text } = buildManagerDigestEmail({
         managerName: digest.managerName,
@@ -280,8 +321,19 @@ async function runReminders(options: RunOptions) {
         reps: digest.reps,
       });
       const result = await sendPaced({ to: digest.managerEmail, subject, html, text });
-      if (result.sent) managersEmailed++;
-      else failed.push({ code: "MANAGER", name: digest.managerName || digest.teamName, email: digest.managerEmail, reason: result.reason });
+      if (result.sent) {
+        managersEmailed++;
+        if (result.id) acceptedDigests.push({ digest, id: result.id });
+      } else failed.push({ code: "MANAGER", name: digest.managerName || digest.teamName, email: digest.managerEmail, reason: result.reason });
+    }
+
+    if (acceptedDigests.length) await sleep(DELIVERY_WAIT_MS);
+    for (const { digest, id } of acceptedDigests) {
+      const event = await lastEventPaced(id);
+      if (event === null) statusUnknown++;
+      if (event === null || !isUndelivered(event)) continue;
+      managersEmailed--;
+      failed.push({ code: "MANAGER", name: digest.managerName || digest.teamName, email: digest.managerEmail, reason: UNDELIVERED_REASON });
     }
 
     await saveReminderState(nextState);
@@ -317,6 +369,8 @@ async function runReminders(options: RunOptions) {
     settled: plan.settled.length,
     ...(options.resend ? { resend: true } : {}),
     ...(to.length ? {} : { error: "No REMINDER_SUMMARY_TO or RESEND_REPLY_TO set, so no summary was sent." }),
+    // After the line above on purpose: if both apply, the delivery gap is the one that misleads.
+    ...(statusUnknown ? { error: `Could not confirm delivery of ${statusUnknown} mail(s), so they count as sent.` } : {}),
   });
 
   logActivity({

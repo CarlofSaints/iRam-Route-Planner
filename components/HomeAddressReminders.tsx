@@ -29,6 +29,7 @@ interface OutstandingRep {
   managerEmail: string;
   timesReminded: number;
   lastRemindedAt: string | null;
+  notDelivered?: boolean;
 }
 
 type BlockReason = "address_no_pin" | "no_email" | "no_login" | "no_manager";
@@ -145,7 +146,7 @@ export default function HomeAddressReminders() {
               summaryText || "nobody, because no summary address is set"
             }.`
           : `Emailed ${r.sent} rep${r.sent === 1 ? "" : "s"} and copied ${r.managersEmailed} manager${r.managersEmailed === 1 ? "" : "s"}.${
-              r.failed > 0 ? ` ${r.failed} failed, see the summary email.` : ""
+              r.failed > 0 ? ` ${r.failed} not delivered, see the summary email.` : ""
             }`
       );
       setConfirmSend(false);
@@ -361,6 +362,9 @@ export default function HomeAddressReminders() {
                               <span className="text-xs text-gray-500"> · last {whenText(r.lastRemindedAt)}</span>
                             </>
                           )}
+                          {r.notDelivered && (
+                            <div className="text-xs font-medium text-red-700">Not delivered: check their email address</div>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-gray-700">
                           {r.managerEmail ? r.managerName || r.teamName : <span className="text-gray-400">nobody on file</span>}
@@ -453,7 +457,7 @@ export default function HomeAddressReminders() {
                     ) : (
                       <>
                         {r.resend ? "resent: " : ""}{r.sent} emailed, {r.managersEmailed} manager{r.managersEmailed === 1 ? "" : "s"} copied
-                        {r.failed > 0 ? `, ${r.failed} failed` : ""}
+                        {r.failed > 0 ? `, ${r.failed} not delivered` : ""}
                         {r.settled > 0 ? `, ${r.settled} done since last run` : ""}
                       </>
                     )}

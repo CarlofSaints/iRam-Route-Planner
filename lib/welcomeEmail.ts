@@ -26,7 +26,7 @@ export const BRAND = {
 } as const;
 
 export type WelcomeEmailResult =
-  | { sent: true }
+  | { sent: true; id?: string }
   | { sent: false; configured: boolean; reason: string };
 
 export interface WelcomeEmailInput {
@@ -472,10 +472,33 @@ export async function sendEmail(input: SendEmailInput): Promise<WelcomeEmailResu
       return { sent: false, configured: true, reason: `Email failed (${res.status}): ${detail}` };
     }
 
-    return { sent: true };
+    const data = await res.json().catch(() => ({}));
+    return { sent: true, id: data?.id };
   } catch (err) {
     console.error("Resend request failed:", err);
     return { sent: false, configured: true, reason: `Email request failed: ${String(err)}` };
+  }
+}
+
+/**
+ * What finally happened to a mail, e.g. "delivered", "suppressed", "bounced".
+ * Null when Resend could not say. A 200 from the send only means it was queued.
+ */
+export async function getEmailLastEvent(id: string): Promise<string | null> {
+  try {
+    const res = await fetch(`https://api.resend.com/emails/${id}`, {
+      headers: { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!res.ok) {
+      console.error("Resend status check failed:", res.status);
+      return null;
+    }
+    const data = await res.json();
+    return typeof data?.last_event === "string" ? data.last_event : null;
+  } catch (err) {
+    console.error("Resend status check failed:", err);
+    return null;
   }
 }
 
