@@ -18,6 +18,7 @@ import {
   parseRecipients,
   buildRepReminderEmail,
   buildManagerDigestEmail,
+  isUndelivered,
   buildAdminSummaryEmail,
 } from "../lib/homeAddressReminder";
 import { remindersEnabled, type AppSettings } from "../lib/data";
@@ -380,6 +381,20 @@ const team = (over: Partial<Team> = {}): Team => ({
   const after = buildManagerDigestEmail({ managerName: "Manager One", teamName: "REGION A", reps: plan.managerDigests[0].reps });
   ok("a refused send reads Send failed in the manager's mail", after.html.includes("Send failed") && after.text.includes("Send failed"));
   ok("and the rep whose mail went still reads Emailed", after.html.includes("Emailed"));
+
+  // Accepted by Resend but suppressed: must not be reported to the manager as emailed.
+  const undeliveredRep = { ...plan.managerDigests[0].reps[0], sendFailed: false, notDelivered: true };
+  const undelivered = buildManagerDigestEmail({ managerName: "Manager One", teamName: "REGION A", reps: [undeliveredRep] });
+  ok("a suppressed mail reads Not delivered, html and text", undelivered.html.includes("Not delivered") && undelivered.text.includes("Not delivered"));
+  ok("and never Emailed in the row", !undelivered.html.includes(">Emailed</td>") && !/Emailed$/m.test(undelivered.text));
+  ok("suppressed and bounced count as undelivered", isUndelivered("suppressed") && isUndelivered("bounced"));
+  ok("delivered, sent and delayed do not", !isUndelivered("delivered") && !isUndelivered("sent") && !isUndelivered("delivery_delayed"));
+  const carried = classifyReps({
+    reps: [{ id: "z", code: "Z1", name: "Zed", email: "z@example.com" }] as never,
+    users: [], teams: [], stores: [],
+    state: { z: { repId: "z", repCode: "Z1", count: 1, firstSentAt: "x", lastSentAt: "y", lastResult: "not_delivered" } },
+  });
+  ok("the Reps page learns of it from the saved state", carried.outstanding[0].notDelivered === true);
   ok("no em dashes in the manager's mail", !/—|&mdash;/.test(mgr.html + mgr.text + mgr.subject));
   ok("the manager's mail is branded iRam", !/clippa/i.test(mgr.html + mgr.text));
 

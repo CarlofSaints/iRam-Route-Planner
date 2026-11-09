@@ -446,7 +446,8 @@ export interface ReminderState {
   count: number;
   firstSentAt: string;
   lastSentAt: string;
-  lastResult: "sent" | "failed";
+  /** "not_delivered": Resend accepted it, then suppressed or bounced it. */
+  lastResult: "sent" | "failed" | "not_delivered";
   lastError?: string;
 }
 
