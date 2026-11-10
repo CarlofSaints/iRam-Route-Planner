@@ -409,6 +409,10 @@ export const GUIDE: GuideSection[] = [
         ],
       },
       {
+        kind: "text",
+        text: "Reps who travel to an area and stay over can set a second start point on the same card, under Staying over somewhere. Use my current location (while at the place they stay) or Drop a pin where I stay. When routes are generated, each day starts and ends at whichever of the two is closer to that day's stores, so a day in the far area no longer charges the drive from home. Remove overnight stay puts every day back on home. Regenerate routes after it changes.",
+      },
+      {
         kind: "shot",
         slot: "rep-account",
         caption: "A rep's own profile, where they set the home their day starts from",

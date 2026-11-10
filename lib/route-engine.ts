@@ -126,6 +126,18 @@ export async function generateRepRoute(
   // point thousands of kilometres from the patch; the centroid is a far better
   // guess, and the pages flag it the same way they flag a missing home.
   const home = parseRepHome(rep.homeGpsLat, rep.homeGpsLng) ?? storeCentroid(routable);
+  // Second start point: a rep working away stays over and does the rest of the
+  // calls from there. Each day starts from whichever is nearer its stores.
+  const stay = parseRepHome(rep.stayGpsLat, rep.stayGpsLng);
+  const startFor = (dayStores: Store[]) => {
+    const c = stay && home ? storeCentroid(dayStores) : null;
+    return c && stay && home &&
+      haversineKm(c.lat, c.lng, stay.lat, stay.lng) < haversineKm(c.lat, c.lng, home.lat, home.lng)
+      ? stay
+      : home;
+  };
+  /** The start a built day was planned from: the stay when marked, else home. */
+  const anchorOf = (plan: RouteDayPlan) => plan.startLatLng ?? home;
   const workingMinutes = (rep.workingHoursPerDay ?? DEFAULT_WORKING_HOURS) * 60;
 
   // Step 1: Distribute stores across weeks based on frequency
@@ -193,8 +205,12 @@ export async function generateRepRoute(
   const builtPlans = await mapWithConcurrency(
     pending,
     GOOGLE_CONCURRENCY,
-    ({ week, dayIdx, dayStores }) =>
-      buildDayPlan(dayStores, home, week, DAYS[dayIdx], startTime, workingMinutes, googleDeadline)
+    async ({ week, dayIdx, dayStores }) => {
+      const start = startFor(dayStores);
+      const plan = await buildDayPlan(dayStores, start, week, DAYS[dayIdx], startTime, workingMinutes, googleDeadline);
+      if (start && start !== home) plan.startLatLng = start;
+      return plan;
+    }
   );
 
   {
@@ -209,9 +225,9 @@ export async function generateRepRoute(
       // dropping the eighth store and looking like the setting was ignored.
       // Without a target, the old time-based trim is untouched.
       const removed = callsPerDay && callsPerDay > 0
-        ? trimToCount(plan, callsPerDay, workingMinutes, home)
+        ? trimToCount(plan, callsPerDay, workingMinutes, anchorOf(plan))
         : plan.overCapacity
-          ? trimToCapacity(plan, workingMinutes, home)
+          ? trimToCapacity(plan, workingMinutes, anchorOf(plan))
           : [];
       for (const r of removed) {
         // Carry the whole planned stop, not just its name. It already holds
@@ -236,7 +252,7 @@ export async function generateRepRoute(
   const stillUnassigned = await rebalanceOverflow(
     dayPlans,
     unassigned,
-    home,
+    anchorOf,
     startTime,
     workingMinutes,
     callsPerDay
@@ -921,7 +937,7 @@ type OverflowCandidate = {
 async function rebalanceOverflow(
   dayPlans: RouteDayPlan[],
   unassigned: OverflowCandidate[],
-  home: { lat: number; lng: number } | null,
+  anchorOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
   startTime: string,
   workingMinutes: number,
   callsPerDay?: number
@@ -964,6 +980,7 @@ async function rebalanceOverflow(
       // honest — the plan reports it, an invented coordinate does not.
       if (!planned) continue;
 
+      const home = anchorOf(bestDay);
       const lastStop = bestDay.stops[bestDay.stops.length - 1];
       const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : home;
       // Real leg from wherever the day currently ends, not a flat 10 km.
