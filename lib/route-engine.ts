@@ -185,33 +185,25 @@ export async function generateRepRoute(
     // of days at the END of the week, so the away days run back to back and
     // the trip out and back is charged once (the first away day leaves from
     // home, the last one drives home). Away days are in proportion to stores.
-    // Minimum calls a day, "fewer, fuller days": work only as many days as
-    // the week's calls can fill to the minimum, but never so few that a day
-    // goes over the calls-per-day cap (that would drop calls instead).
-    const weekCalls =
-      singleDay.length +
-      multiDay.reduce((n, st) => n + Math.min(getVisitsPerWeek(st.frequency || "monthly"), DAYS.length), 0);
-    const activeDays =
-      minMode === "pack" && minCalls > 0
-        ? Math.min(
-            DAYS.length,
-            Math.max(
-              1,
-              Math.floor(weekCalls / minCalls),
-              callsPerDay && callsPerDay > 0 ? Math.ceil(weekCalls / callsPerDay) : 0
-            )
-          )
-        : DAYS.length;
+    // How many days the rep works this week, and how many of those are away
+    // at the overnight stay. See planWeekDays.
+    const sideOf = (away: boolean): WeekSide => {
+      const side = weekStores.filter((st) => nearStay(st) === away);
+      const visits = (st: Store) => Math.min(getVisitsPerWeek(st.frequency || "monthly"), DAYS.length);
+      return {
+        calls: side.reduce((n, st) => n + visits(st), 0),
+        maxVisits: side.reduce((m, st) => Math.max(m, visits(st)), 0),
+        // shortcut: drive guessed at 15 min a call; real overruns open a free day below.
+        minutes: side.reduce((t, st) => t + ((st.duration || 30) + 15) * visits(st), 0),
+      };
+    };
+    const { activeDays, awayDays } = planWeekDays(sideOf(false), sideOf(true), {
+      pack: minMode === "pack" && minCalls > 0,
+      minCalls,
+      cap: callsPerDay && callsPerDay > 0 ? callsPerDay : undefined,
+      workingMinutes,
+    });
     for (let d = activeDays; d < DAYS.length; d++) freeDays.push({ week, day: DAYS[d] });
-
-    const awayCount = weekStores.filter(nearStay).length;
-    const awayDays =
-      awayCount === 0
-        ? 0
-        : Math.min(
-            awayCount === weekStores.length ? activeDays : activeDays - 1,
-            Math.max(1, Math.round((activeDays * awayCount) / weekStores.length))
-          );
     const homeDayIdx = DAYS.map((_, i) => i).slice(0, activeDays - awayDays);
     const awayDayIdx = DAYS.map((_, i) => i).slice(activeDays - awayDays, activeDays);
 
@@ -330,6 +322,40 @@ export async function generateRepRoute(
     }
   }
 
+  // Fewer, fuller days chose its days from a drive-time ESTIMATE. Where the
+  // real routes came out longer and calls were trimmed, open that week's free
+  // days for them rather than drop calls while a whole day sits empty.
+  if (minMode === "pack" && freeDays.length > 0) {
+    const storeById = new Map(routable.map((st) => [st.id, st]));
+    for (const week of WEEKS) {
+      for (;;) {
+        const freeAt = freeDays.findIndex((f) => f.week === week);
+        // Home-side calls only: an empty day after the away block starts from home.
+        const left = unassigned.filter(
+          (u) => u.week === week && u.stop && storeById.has(u.storeId) && !nearStay(storeById.get(u.storeId)!)
+        );
+        if (freeAt === -1 || left.length === 0) break;
+        const { day } = freeDays.splice(freeAt, 1)[0];
+        const opened = await buildDayPlan(
+          left.map((u) => storeById.get(u.storeId)!),
+          home, home, week, day, startTime, workingMinutes, googleDeadline
+        );
+        const removed =
+          callsPerDay && callsPerDay > 0
+            ? trimToCount(opened, callsPerDay, workingMinutes, home)
+            : opened.overCapacity
+              ? trimToCapacity(opened, workingMinutes, home)
+              : [];
+        const stillOut = new Map(removed.map((r) => [r.storeId, r]));
+        for (const u of left) {
+          if (stillOut.has(u.storeId)) u.stop = stillOut.get(u.storeId);
+          else unassigned.splice(unassigned.indexOf(u), 1);
+        }
+        dayPlans.push(opened);
+      }
+    }
+  }
+
   // Step 4: Try to fit unassigned stores into days with remaining capacity
   const stillUnassigned = await rebalanceOverflow(
     dayPlans,
@@ -343,7 +369,10 @@ export async function generateRepRoute(
 
   if (minCalls > 0) {
     if (minMode === "fill") {
-      fillShortDays(dayPlans, routable, nearStay, (plan) => plan.startLatLng ?? home, endOf, startTime, workingMinutes, minCalls);
+      const stillOut = new Set(stillUnassigned.map((u) => u.storeId));
+      // iRam has no store sales to rank by: any of the rep's stores, nearest first.
+      const pool = routable.filter((st) => !stillOut.has(st.id));
+      fillShortDays(dayPlans, pool, nearStay, (plan) => plan.startLatLng ?? home, endOf, startTime, workingMinutes, minCalls);
     }
     for (const plan of dayPlans) {
       const short = minCalls - plan.stops.length;
@@ -1165,6 +1194,62 @@ function stopFromStore(store: Store): RouteStop | undefined {
   };
 }
 
+/** How far from a day's existing calls an extra call may be. */
+const FILL_RADIUS_KM = 15;
+
+/** One side of a week (home or overnight stay): its calls, busiest store, and minutes. */
+export interface WeekSide {
+  calls: number;
+  /** Most visits any one store on this side needs this week (1 to 5). */
+  maxVisits: number;
+  minutes: number;
+}
+
+/**
+ * How many days the rep works this week, and how many of those are away at
+ * the overnight stay (always the last ones).
+ *
+ * Without "fewer, fuller days" the rep works all five. With it, as few days as
+ * fill each to the minimum, but never fewer than: the calls-per-day cap
+ * needs, the estimated minutes need, or each side's busiest store needs (a
+ * 3x-weekly store needs three days on its side). A side with stores always
+ * gets at least one day, so no store is silently left out.
+ */
+export function planWeekDays(
+  home: WeekSide,
+  away: WeekSide,
+  o: { pack: boolean; minCalls: number; cap?: number; workingMinutes: number }
+): { activeDays: number; awayDays: number } {
+  const N = DAYS.length;
+  const need = (side: WeekSide) => (side.calls > 0 ? Math.max(1, Math.min(side.maxVisits, N)) : 0);
+  const needHome = need(home);
+  const needAway = need(away);
+  const total = home.calls + away.calls;
+
+  let activeDays = N;
+  if (o.pack && o.minCalls > 0 && total > 0) {
+    activeDays = Math.min(
+      N,
+      Math.max(
+        1,
+        Math.floor(total / o.minCalls),
+        o.cap ? Math.ceil(total / o.cap) : 0,
+        Math.ceil((home.minutes + away.minutes) / o.workingMinutes),
+        needHome + needAway
+      )
+    );
+  }
+  if (needAway === 0) return { activeDays, awayDays: 0 };
+  if (needHome === 0) return { activeDays, awayDays: activeDays };
+
+  // Both sides: days in proportion to calls, but each side keeps enough days
+  // for its busiest store when the week has room for both.
+  const roomForBoth = activeDays >= needHome + needAway;
+  const lo = roomForBoth ? needAway : 1;
+  const hi = roomForBoth ? activeDays - needHome : activeDays - 1;
+  return { activeDays, awayDays: Math.min(hi, Math.max(lo, Math.round((activeDays * away.calls) / total))) };
+}
+
 /**
  * Minimum calls a day, "top up with extra calls": bring each short day up to
  * the minimum with an EXTRA visit to the rep's stores near that day
@@ -1173,7 +1258,7 @@ function stopFromStore(store: Store): RouteStop | undefined {
  */
 function fillShortDays(
   dayPlans: RouteDayPlan[],
-  routable: Store[],
+  pool: Store[],
   nearStay: (s: Store) => boolean,
   startOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
   endOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
@@ -1181,25 +1266,24 @@ function fillShortDays(
   workingMinutes: number,
   minCalls: number
 ): void {
-  const byId = new Map(routable.map((st) => [st.id, st]));
-  // iRam has no store sales to rank by, so any of the rep's stores, nearest first.
-  const pool = routable;
   for (const day of dayPlans) {
     if (day.stops.length === 0 || day.stops.length >= minCalls) continue;
-    const firstStore = byId.get(day.stops[0].storeId);
-    const away = firstStore ? nearStay(firstStore) : false;
-    const c = {
-      lat: day.stops.reduce((t, st) => t + st.lat, 0) / day.stops.length,
-      lng: day.stops.reduce((t, st) => t + st.lng, 0) / day.stops.length,
-    };
-    const candidates = pool
+    const first = day.stops[0];
+    const away = nearStay({ gpsLat: String(first.lat), gpsLng: String(first.lng) } as Store);
+    // Only stores close to where the day already goes, so a short day is not
+    // padded with a long drive just because the clock has room.
+    let candidates = pool
       .filter((st) => nearStay(st) === away && !day.stops.some((x) => x.storeId === st.id))
-      .map((st) => ({ stop: stopFromStore(st)! }))
-      .filter((x) => x.stop)
-      .sort((x, y) => haversineKm(c.lat, c.lng, x.stop.lat, x.stop.lng) - haversineKm(c.lat, c.lng, y.stop.lat, y.stop.lng));
-    for (const { stop } of candidates) {
-      if (day.stops.length >= minCalls) break;
-      appendStop(day, stop, startOf(day), endOf(day), startTime, workingMinutes, true);
+      .map((st) => stopFromStore(st))
+      .filter((st): st is RouteStop => !!st)
+      .filter((st) => day.stops.some((x) => haversineKm(x.lat, x.lng, st.lat, st.lng) <= FILL_RADIUS_KM));
+    // Each extra call is the nearest to where the day now ends, so it does not zigzag.
+    while (day.stops.length < minCalls && candidates.length > 0) {
+      const last = day.stops[day.stops.length - 1];
+      candidates.sort((x, y) => haversineKm(last.lat, last.lng, x.lat, x.lng) - haversineKm(last.lat, last.lng, y.lat, y.lng));
+      const next = candidates[0];
+      candidates = candidates.slice(1);
+      appendStop(day, next, startOf(day), endOf(day), startTime, workingMinutes, true);
     }
   }
 }

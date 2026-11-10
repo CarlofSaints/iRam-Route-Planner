@@ -7,7 +7,7 @@
  * plain 5-day week gives 6 a day: two short of the minimum, every day.
  */
 
-import { generateRepRoute } from "../lib/route-engine";
+import { generateRepRoute, planWeekDays } from "../lib/route-engine";
 import type { Rep, Store, MinCallsMode } from "../lib/types";
 
 let passed = 0;
@@ -72,6 +72,53 @@ async function main() {
 
   const capped = await generateRepRoute(rep(8, "flag"), stores, "08:00", undefined, undefined, 5);
   ok("a minimum above the calls-per-day cap is read as the cap", capped.minCallsPerDay === 5 && capped.days.every((d) => !d.underMinimumBy));
+
+  // ── planWeekDays on its own ──
+  const side = (calls: number, maxVisits = 1) => ({ calls, maxVisits, minutes: calls * 45 });
+  const W = 510;
+  ok("no pack: 5 days", planWeekDays(side(30), side(0), { pack: false, minCalls: 8, workingMinutes: W }).activeDays === 5);
+  ok("pack: 30 calls at min 8 = 3 days", planWeekDays(side(30), side(0), { pack: true, minCalls: 8, workingMinutes: W }).activeDays === 3);
+  const light = planWeekDays(side(4), side(2), { pack: true, minCalls: 8, workingMinutes: W });
+  ok("pack: light week with a stay keeps a day for EACH side", light.activeDays === 2 && light.awayDays === 1, JSON.stringify(light));
+  const busy = planWeekDays(side(21, 5), side(0), { pack: true, minCalls: 8, workingMinutes: W });
+  ok("pack: a daily store keeps all 5 days", busy.activeDays === 5, JSON.stringify(busy));
+  const thrice = planWeekDays(side(12, 3), side(6), { pack: true, minCalls: 8, workingMinutes: W });
+  ok("pack: a 3x-weekly home store keeps 3 home days", thrice.activeDays - thrice.awayDays >= 3 && thrice.awayDays >= 1, JSON.stringify(thrice));
+  ok("pack: never below what the cap needs", planWeekDays(side(30), side(0), { pack: true, minCalls: 8, cap: 8, workingMinutes: W }).activeDays === 4);
+
+  // ── light pack week with an overnight stay: nothing vanishes ──
+  const STAY = { lat: -23.9, lng: 29.45 };
+  const few: Store[] = [
+    ...stores.slice(0, 4),
+    ...[0, 1].map((i) => ({ ...stores[0], id: `P${i}`, placeId: `P${i}`, name: `P${i}`, gpsLat: String(STAY.lat + i * 0.01), gpsLng: String(STAY.lng) }) as Store),
+  ];
+  const lightPlan = await generateRepRoute(
+    { ...rep(8, "pack"), stayGpsLat: String(STAY.lat), stayGpsLng: String(STAY.lng) } as Rep, few, "08:00");
+  const planned = new Set(wk1(lightPlan.days).flatMap((d) => d.stops.map((s) => s.storeId)));
+  ok("pack + stay, light week: every store is planned or reported",
+    few.every((st) => planned.has(st.id) || lightPlan.stats.unassignedStores.some((u) => u.storeId === st.id)),
+    [...planned].join(","));
+
+  // ── pack keeps every visit of a daily store ──
+  const daily = { ...stores[0], id: "D", placeId: "D", name: "D", frequency: "daily" } as Store;
+  const packDaily = await generateRepRoute(rep(8, "pack"), [...stores.slice(1, 21), daily], "08:00");
+  ok("pack: daily store still visited 5 times a week", wk1(packDaily.days).filter((d) => d.stops.some((s) => s.storeId === "D")).length === 5);
+
+  // ── top-up: no unknown-sales stores (Clippa), nothing far away ──
+  const unknown = { ...stores[0], id: "U", placeId: "U", name: "U", monthlySales: 0 } as Store;
+  const far = { ...stores[29], id: "F", placeId: "F", name: "F", gpsLat: String(HOME.lat + 0.5), monthlySales: 999999 } as Store;
+  const topped = await generateRepRoute(rep(8, "fill"), [...stores, unknown, far], "08:00");
+  const extras = topped.days.flatMap((d) => d.stops.filter((s) => s.extraVisit));
+  ok("fill: no extra call 50 km away", extras.every((s) => s.storeId !== "F"));
+
+  // ── rural rep: real drives beat the 15-minute guess, so a free day must reopen ──
+  const rural = stores.map((st, n) => ({ ...st, gpsLat: String(HOME.lat + (n % 6) * 0.12), gpsLng: String(HOME.lng + Math.floor(n / 6) * 0.12) }) as Store);
+  const ruralPlan = await generateRepRoute(rep(8, "pack"), rural, "08:00");
+  ok("pack, rural: no call dropped while a day sits free",
+    ruralPlan.stats.unassignedStores.length === 0 || (ruralPlan.freeDays ?? []).length === 0,
+    `${ruralPlan.stats.unassignedStores.length} unassigned, ${(ruralPlan.freeDays ?? []).length} free days`);
+  ok("pack, rural: all 30 calls planned in week 1", wk1(ruralPlan.days).reduce((n, d) => n + d.stops.length, 0) === 30,
+    String(wk1(ruralPlan.days).reduce((n, d) => n + d.stops.length, 0)));
 
   console.log(`\n${passed} passed, ${failed} failed`);
   if (failed) process.exit(1);

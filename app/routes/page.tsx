@@ -1134,11 +1134,6 @@ export default function RoutesPage() {
                 overrun is against the same total the bar prints — and so the
                 drive home is inside it. A day that fits until the rep starts
                 driving home does not fit. */}
-            {selectedDayPlan.underMinimumBy && (
-              <span className="ml-1 text-red-700">
-                | {selectedDayPlan.underMinimumBy} short of the rep&apos;s minimum of {currentPlan!.minCallsPerDay} calls
-              </span>
-            )}
             {selectedTotals!.overBy !== null && (
               <span className="ml-1">
                 {`| OVER the working day by ${
@@ -1146,6 +1141,11 @@ export default function RoutesPage() {
                     ? `${Math.floor(selectedTotals!.overBy / 60)}h ${selectedTotals!.overBy % 60}m`
                     : `${selectedTotals!.overBy}m`
                 }`}
+              </span>
+            )}
+            {selectedDayPlan.underMinimumBy && (
+              <span className="ml-1 text-red-700">
+                | {selectedDayPlan.underMinimumBy} short of the rep&apos;s minimum of {currentPlan!.minCallsPerDay} calls
               </span>
             )}
           </div>

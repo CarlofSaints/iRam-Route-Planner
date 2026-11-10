@@ -137,10 +137,10 @@ export async function DELETE(request: NextRequest) {
   }
 }
 
-/** A whole number of calls from 1 to 30, or undefined (no minimum) for anything else. */
+/** A whole number of calls, capped at 30; blank, 0 or junk means no minimum. */
 function cleanMinCalls(v: unknown): number | undefined {
   const n = Math.round(Number(v));
-  return v !== null && v !== "" && Number.isFinite(n) && n >= 1 && n <= 30 ? n : undefined;
+  return v !== null && v !== "" && Number.isFinite(n) && n >= 1 ? Math.min(n, 30) : undefined;
 }
 
 function cleanMinMode(v: unknown): MinCallsMode | undefined {

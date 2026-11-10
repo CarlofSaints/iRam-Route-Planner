@@ -891,7 +891,7 @@ export default function RepsPage() {
                           placeholder="none"
                           aria-label="Minimum calls per day"
                           value={editData.minCallsPerDay || ""}
-                          onChange={(e) => setEditData({ ...editData, minCallsPerDay: Math.round(Number(e.target.value)) || 0 })}
+                          onChange={(e) => setEditData({ ...editData, minCallsPerDay: Math.min(30, Math.max(0, Math.round(Number(e.target.value)) || 0)) })}
                           className="border border-gray-200 rounded px-2 py-1 text-sm w-16 text-center focus:outline-none focus:ring-1 focus:ring-iram-green"
                         />
                         {!!editData.minCallsPerDay && (
