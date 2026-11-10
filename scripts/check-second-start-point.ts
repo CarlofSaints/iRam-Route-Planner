@@ -46,32 +46,44 @@ for (let i = 0; i < 10; i++) stores.push(store(`PLK${i}`, STAY.lat + (i % 5) * 0
 async function main() {
   const withStay = await generateRepRoute(rep({ stayGpsLat: String(STAY.lat), stayGpsLng: String(STAY.lng) }), stores, "08:00");
   const wk1 = withStay.days.filter((d) => d.week === "Wk1");
-  const away = wk1.filter((d) => d.stops.every((s) => s.storeId.startsWith("PLK")));
+  const isAway = (d: (typeof wk1)[number]) => d.stops.every((s) => s.storeId.startsWith("PLK"));
+  const away = wk1.filter(isAway);
   const local = wk1.filter((d) => d.stops.every((s) => s.storeId.startsWith("JHB")));
+  const order = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+  const awayIdx = away.map((d) => order.indexOf(d.day)).sort();
 
-  ok("some days are all Polokwane stores", away.length > 0, `${wk1.map((d) => d.stops.map((s) => s.storeId).join(",")).join(" | ")}`);
-  ok("Polokwane days start from the stay", away.every((d) => d.startLatLng?.lat === STAY.lat));
-  ok("Johannesburg days start from home (no startLatLng)", local.length > 0 && local.every((d) => !d.startLatLng));
+  ok("no day mixes Johannesburg and Polokwane stores", away.length + local.length === wk1.length,
+    wk1.map((d) => d.stops.map((s) => s.storeId).join(",")).join(" | "));
+  ok("away days are back to back at the end of the week", awayIdx.length >= 2 && awayIdx.every((d, i) => d === 4 - (awayIdx.length - 1) + i), awayIdx.join(","));
+  const first = away.find((d) => order.indexOf(d.day) === awayIdx[0])!;
+  const last = away.find((d) => d.day === "Friday")!;
+  ok("first away day leaves from home and ends at the stay", !first.startLatLng && first.endLatLng?.lat === STAY.lat);
+  ok("first away day charges the ~270 km drive out", first.stops[0].distanceFromPrev > 200, String(first.stops[0].distanceFromPrev));
+  ok("first away day ends with a short leg to the stay", (first.returnDistanceKm ?? 999) < 30, String(first.returnDistanceKm));
+  ok("Friday starts at the stay and drives home", last.startLatLng?.lat === STAY.lat && !last.endLatLng && (last.returnDistanceKm ?? 0) > 200,
+    `${JSON.stringify(last.startLatLng)} ${last.returnDistanceKm}`);
+  ok("Friday's first leg is short", last.stops[0].distanceFromPrev < 30, String(last.stops[0].distanceFromPrev));
+  ok("Johannesburg days start and end at home", local.length > 0 && local.every((d) => !d.startLatLng && !d.endLatLng && (d.returnDistanceKm ?? 999) < 30));
   ok(
-    "Polokwane days drive back to the stay, not 270 km home",
-    away.every((d) => (d.returnDistanceKm ?? 999) < 30),
-    away.map((d) => d.returnDistanceKm).join(",")
-  );
-  ok(
-    "first leg of a Polokwane day is short",
-    away.every((d) => d.stops[0].distanceFromPrev < 30),
-    away.map((d) => d.stops[0].distanceFromPrev).join(",")
-  );
-  ok(
-    "dayTotals reads the stay for a day saved without a return leg",
-    away.every((d) => {
-      const { returnDistanceKm, returnTravelTime, ...old } = d;
+    "dayTotals measures an old-style day's last leg to the stay",
+    (() => {
+      const { returnDistanceKm, returnTravelTime, ...old } = first;
       void returnDistanceKm; void returnTravelTime;
-      const last = d.stops[d.stops.length - 1];
+      const l = first.stops[first.stops.length - 1];
       const t = dayTotals(old, HOME, 8.5);
-      return t.returnKm !== null && Math.abs(t.returnKm - haversineKm(last.lat, last.lng, STAY.lat, STAY.lng)) < 0.2;
-    })
+      return t.returnKm !== null && Math.abs(t.returnKm - haversineKm(l.lat, l.lng, STAY.lat, STAY.lng)) < 0.2;
+    })()
   );
+
+  // A twice-a-week Johannesburg store must never be pinned onto an away day.
+  const twice = { ...store("JHBX", HOME.lat, HOME.lng + 0.05), frequency: "2x_weekly" } as Store;
+  const daily = { ...store("JHBD", HOME.lat, HOME.lng + 0.06), frequency: "daily" } as Store;
+  const pinned = await generateRepRoute(rep({ stayGpsLat: String(STAY.lat), stayGpsLng: String(STAY.lng) }), [...stores, twice, daily], "08:00");
+  const pWk1 = pinned.days.filter((d) => d.week === "Wk1");
+  ok("multi-visit home stores stay off away days", pWk1.filter((d) => d.stops.some((s) => s.storeId.startsWith("PLK")))
+    .every((d) => !d.stops.some((s) => s.storeId === "JHBX" || s.storeId === "JHBD")));
+  ok("2x weekly home store still gets 2 calls", pWk1.filter((d) => d.stops.some((s) => s.storeId === "JHBX")).length === 2);
+  ok("daily home store's lost away-day calls are reported", pinned.stats.unassignedStores.some((u) => u.storeId === "JHBD" && /away at the overnight stay/.test(u.reason)));
 
   const noStay = await generateRepRoute(rep(), stores, "08:00");
   ok("without a stay, no day is marked", noStay.days.every((d) => !d.startLatLng));

@@ -177,6 +177,7 @@ export function explainCapacity(
   const bookExceedsHours = allocated.length > 0 && bookVisitHours > row.availableHours;
   const bookOverBy = row.availableHours > 0 ? round1(bookVisitHours / row.availableHours) : 0;
   const planStart = plan?.homeLatLng ?? null;
+  const stay = parseRepHome(rep.stayGpsLat, rep.stayGpsLng);
   // The plan is the truth about what was measured; the rep record only says
   // what the NEXT generation will use.
   const startPoint = planStart ?? currentHome;
@@ -211,7 +212,9 @@ export function explainCapacity(
         frequency: s.frequency || "monthly",
         durationMin: s.duration || 0,
         callsPerMonth: getMonthlyRate(s.frequency || "monthly"),
-        kmFromStart: p && startPoint ? Math.round(km(startPoint, p)) : null,
+        // Nearer of the day's start and the overnight stay: a store the rep
+        // works from the stay is not "far from home".
+        kmFromStart: p && startPoint ? Math.round(stay ? Math.min(km(startPoint, p), km(stay, p)) : km(startPoint, p)) : null,
         scheduled: scheduled.get(s.id) ?? 0,
         missed: missed.get(s.id)?.count ?? 0,
         missedReason: missed.get(s.id)?.reason ?? "",

@@ -159,14 +159,22 @@ export default function AccountPage() {
     setHomeMessage("");
     setHomeError("");
     setHomeSaving(true);
-    const res = await fetch("/api/account/rep-profile", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ target: "stay", ...payload }),
-    });
-    const data = await res.json().catch(() => ({}));
-    setHomeSaving(false);
-    if (!res.ok) {
+    let res: Response;
+    let data: { error?: string; note?: string; rep?: RepProfile } = {};
+    try {
+      res = await fetch("/api/account/rep-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "stay", ...payload }),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch {
+      setHomeError("No connection. Try again when you have signal.");
+      return;
+    } finally {
+      setHomeSaving(false);
+    }
+    if (!res.ok || !data.rep) {
       setHomeError(data.error || "Could not save where you're staying");
       return;
     }

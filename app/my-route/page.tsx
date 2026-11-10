@@ -21,7 +21,7 @@ const WEEKS = ["Wk1", "Wk2", "Wk3", "Wk4"] as const;
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"] as const;
 
 interface MyRouteResponse {
-  rep: { code: string; name: string; hasHome: boolean; roleName: string } | null;
+  rep: { code: string; name: string; hasHome: boolean; roleName: string; stayOutOfDate?: boolean } | null;
   generatedAt: string | null;
   plans: MyPlan[];
   stores: MyStore[];
@@ -49,13 +49,17 @@ function directionsTo(p: { lat: number; lng: number }) {
  * per-stop links below cover the rest.
  */
 const MAX_WAYPOINTS = 9;
-function directionsForDay(home: { lat: number; lng: number } | null, day: MyDay) {
+function directionsForDay(
+  home: { lat: number; lng: number } | null,
+  day: MyDay,
+  end: { lat: number; lng: number } | null = home
+) {
   const stops = day.stops;
   if (stops.length === 0) return null;
   const params = new URLSearchParams({ api: "1", travelmode: "driving" });
   if (home) {
     params.set("origin", at(home));
-    params.set("destination", at(home));
+    params.set("destination", at(end ?? home));
     params.set("waypoints", stops.slice(0, MAX_WAYPOINTS).map(at).join("|"));
   } else {
     // No home: start from where they are, end at the last call.
@@ -98,9 +102,9 @@ export default function MyRoutePage() {
 
   const current = byKey.get(`${week}|${day}`) ?? null;
   // A day planned from the overnight stay starts and ends there instead of home.
-  const atStay = !!current?.startLatLng;
   const start = current?.startLatLng ?? home;
-  const dayLink = current ? directionsForDay(start, current) : null;
+  const end = current?.endLatLng ?? home;
+  const dayLink = current ? directionsForDay(start, current, end) : null;
   const unplanned = (data?.stores ?? []).filter((s) => !s.planned).length;
 
   if (loadError) {
@@ -131,6 +135,13 @@ export default function MyRoutePage() {
             })}.`}
         </p>
       </div>
+
+      {data.rep.stayOutOfDate && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
+          <strong className="font-semibold">Your overnight stay changed after this route was planned.</strong>{" "}
+          Days away still use the old spot until your manager regenerates routes.
+        </div>
+      )}
 
       {!data.rep.hasHome && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-xs text-amber-900">
@@ -253,6 +264,7 @@ export default function MyRoutePage() {
               <div className="h-[320px] sm:h-[420px] overflow-hidden rounded-xl border border-gray-100">
                 <MyRouteMap
                   home={start}
+                  end={end}
                   stops={current.stops}
                   polyline={current.polyline}
                   fitKey={`${planIdx}|${week}|${day}`}
@@ -261,7 +273,7 @@ export default function MyRoutePage() {
 
               <div className="rounded-xl border border-gray-100 bg-white divide-y divide-gray-100">
                 {start && current.leaveHome && (
-                  <Row title={atStay ? "Leave where you're staying" : "Leave home"} sub={current.leaveHome} />
+                  <Row title={current.startLatLng ? "Leave where you're staying" : "Leave home"} sub={current.leaveHome} />
                 )}
                 {current.stops.map((s, i) => (
                   <div key={`${s.storeId}-${i}`} className="flex items-center gap-3 p-3">
@@ -287,7 +299,7 @@ export default function MyRoutePage() {
                 ))}
                 {start && current.returnKm != null && (
                   <Row
-                    title={atStay ? "Back where you're staying" : "Back home"}
+                    title={current.endLatLng ? "Drive to where you're staying" : "Back home"}
                     sub={`${current.arriveHome ?? ""} · ${Math.round(current.returnKm)} km, ${fmtMinutes(
                       current.returnMinutes ?? 0
                     )} drive`}

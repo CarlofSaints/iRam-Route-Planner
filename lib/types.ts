@@ -669,8 +669,13 @@ export interface RouteDayPlan {
   returnTravelTime?: number; // minutes
   /** When the rep gets home, last stop's departure plus the leg home. */
   arriveHomeTime?: string; // "HH:mm"
-  /** Set only when this day starts and ends at the rep's overnight stay, not home. */
+  /**
+   * Set only when this day starts / ends at the rep's overnight stay rather
+   * than home. Away days run back to back: the first leaves from home and ends
+   * at the stay, the last starts at the stay and drives home.
+   */
   startLatLng?: { lat: number; lng: number };
+  endLatLng?: { lat: number; lng: number };
   polyline?: string; // encoded Google polyline
 }
 
