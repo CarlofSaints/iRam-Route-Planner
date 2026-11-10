@@ -83,7 +83,7 @@ async function main() {
   ok("multi-visit home stores stay off away days", pWk1.filter((d) => d.stops.some((s) => s.storeId.startsWith("PLK")))
     .every((d) => !d.stops.some((s) => s.storeId === "JHBX" || s.storeId === "JHBD")));
   ok("2x weekly home store still gets 2 calls", pWk1.filter((d) => d.stops.some((s) => s.storeId === "JHBX")).length === 2);
-  ok("daily home store's lost away-day calls are reported", pinned.stats.unassignedStores.some((u) => u.storeId === "JHBD" && /away at the overnight stay/.test(u.reason)));
+  ok("daily home store's lost away-day calls are reported", pinned.stats.unassignedStores.some((u) => u.storeId === "JHBD" && /works \d days? a week from home/.test(u.reason)));
 
   const noStay = await generateRepRoute(rep(), stores, "08:00");
   ok("without a stay, no day is marked", noStay.days.every((d) => !d.startLatLng));

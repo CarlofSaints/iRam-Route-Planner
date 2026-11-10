@@ -137,6 +137,16 @@ export async function generateRepRoute(
   /** Where a built day ends: the stay when marked, else home. */
   const endOf = (plan: RouteDayPlan) => plan.endLatLng ?? home;
   const lostReported = new Set<string>();
+
+  // Rep-level minimum calls a day. Never above the calls-per-day cap: the cap
+  // is the instruction, so a minimum that exceeds it is read as "the cap".
+  const minCalls =
+    rep.minCallsPerDay && rep.minCallsPerDay > 0
+      ? Math.min(rep.minCallsPerDay, callsPerDay && callsPerDay > 0 ? callsPerDay : Infinity)
+      : 0;
+  const minMode = rep.minCallsMode ?? "flag";
+  /** Days left empty on purpose so the rest reach the minimum ("pack" mode). */
+  const freeDays: { week: WeekLabel; day: DayLabel }[] = [];
   const workingMinutes = (rep.workingHoursPerDay ?? DEFAULT_WORKING_HOURS) * 60;
 
   // Step 1: Distribute stores across weeks based on frequency
@@ -175,16 +185,35 @@ export async function generateRepRoute(
     // of days at the END of the week, so the away days run back to back and
     // the trip out and back is charged once (the first away day leaves from
     // home, the last one drives home). Away days are in proportion to stores.
+    // Minimum calls a day, "fewer, fuller days": work only as many days as
+    // the week's calls can fill to the minimum, but never so few that a day
+    // goes over the calls-per-day cap (that would drop calls instead).
+    const weekCalls =
+      singleDay.length +
+      multiDay.reduce((n, st) => n + Math.min(getVisitsPerWeek(st.frequency || "monthly"), DAYS.length), 0);
+    const activeDays =
+      minMode === "pack" && minCalls > 0
+        ? Math.min(
+            DAYS.length,
+            Math.max(
+              1,
+              Math.floor(weekCalls / minCalls),
+              callsPerDay && callsPerDay > 0 ? Math.ceil(weekCalls / callsPerDay) : 0
+            )
+          )
+        : DAYS.length;
+    for (let d = activeDays; d < DAYS.length; d++) freeDays.push({ week, day: DAYS[d] });
+
     const awayCount = weekStores.filter(nearStay).length;
     const awayDays =
       awayCount === 0
         ? 0
         : Math.min(
-            awayCount === weekStores.length ? DAYS.length : DAYS.length - 1,
-            Math.max(1, Math.round((DAYS.length * awayCount) / weekStores.length))
+            awayCount === weekStores.length ? activeDays : activeDays - 1,
+            Math.max(1, Math.round((activeDays * awayCount) / weekStores.length))
           );
-    const homeDayIdx = DAYS.map((_, i) => i).slice(0, DAYS.length - awayDays);
-    const awayDayIdx = DAYS.map((_, i) => i).slice(DAYS.length - awayDays);
+    const homeDayIdx = DAYS.map((_, i) => i).slice(0, activeDays - awayDays);
+    const awayDayIdx = DAYS.map((_, i) => i).slice(activeDays - awayDays, activeDays);
 
     const pinnedPerDay = [0, 0, 0, 0, 0];
     const pins: Store[][] = [[], [], [], [], []];
@@ -204,9 +233,9 @@ export async function generateRepRoute(
         unassigned.push({
           storeId: store.id,
           storeName: store.name,
-          reason: `${lost} of its weekly calls fall on days spent ${
-            away ? "at home" : "away at the overnight stay"
-          }`,
+          reason: `${lost} of its weekly calls don't fit: the rep works ${sideDays.length} day${
+            sideDays.length === 1 ? "" : "s"
+          } a week ${away ? "from the overnight stay" : "from home"}`,
         });
       }
     }
@@ -230,7 +259,7 @@ export async function generateRepRoute(
     }
     // Away block: first day drives out from home, last day drives back home.
     const startOf = (dayIdx: number) => (awayDays > 1 && dayIdx > awayDayIdx[0] ? stay : home);
-    const endAt = (dayIdx: number) => (awayDays > 1 && dayIdx < DAYS.length - 1 && dayIdx >= awayDayIdx[0] ? stay : home);
+    const endAt = (dayIdx: number) => (awayDays > 1 && dayIdx < activeDays - 1 && dayIdx >= awayDayIdx[0] ? stay : home);
 
     for (let dayIdx = 0; dayIdx < pins.length; dayIdx++) {
       for (const store of pins[dayIdx]) (clusters[dayIdx] ||= []).push(store);
@@ -312,6 +341,16 @@ export async function generateRepRoute(
     callsPerDay
   );
 
+  if (minCalls > 0) {
+    if (minMode === "fill") {
+      fillShortDays(dayPlans, routable, nearStay, (plan) => plan.startLatLng ?? home, endOf, startTime, workingMinutes, minCalls);
+    }
+    for (const plan of dayPlans) {
+      const short = minCalls - plan.stops.length;
+      if (short > 0) plan.underMinimumBy = short;
+    }
+  }
+
   const noGpsUnassigned = noGps.map((s) => ({
     storeId: s.id,
     storeName: s.name,
@@ -338,6 +377,9 @@ export async function generateRepRoute(
     // Stamped on the rep, so a week can say what it was built on even when the
     // document as a whole was built on something else.
     callsPerDay: callsPerDay && callsPerDay > 0 ? callsPerDay : undefined,
+    minCallsPerDay: minCalls > 0 ? minCalls : undefined,
+    minCallsMode: minCalls > 0 ? minMode : undefined,
+    freeDays: freeDays.length > 0 ? freeDays : undefined,
     generatedAt: new Date().toISOString(),
     days: dayPlans,
     stats: {
@@ -1031,58 +1073,10 @@ async function rebalanceOverflow(
       .sort((a, b) => a.totalTime - b.totalTime);
 
     for (const bestDay of candidates) {
-      const end = endOf(bestDay);
-      const lastStop = bestDay.stops[bestDay.stops.length - 1];
-      const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : startOf(bestDay);
-      // Real leg from wherever the day currently ends, not a flat 10 km.
-      const distanceKm = from
-        ? haversineKm(from.lat, from.lng, planned.lat, planned.lng)
-        : 0;
-      const travelMin = driveMinutes(distanceKm);
-      const visitDuration = planned.visitDuration;
-
-      // What the day WOULD cost with this store on the end: the current total,
-      // less the leg home it holds now, plus the new leg in, the visit, and the
-      // longer drive home from the store just added. Comparing against the old
-      // total alone let a store on at the far edge of the territory look free.
-      const newReturnMin = end
-        ? driveMinutes(haversineKm(planned.lat, planned.lng, end.lat, end.lng))
-        : 0;
-      const prospective =
-        bestDay.totalTime -
-        (bestDay.returnTravelTime ?? 0) +
-        travelMin +
-        visitDuration +
-        newReturnMin;
-
-      if (prospective > workingMinutes) continue;
-
-      // Arrive after the last stop departs. totalTravelTime includes the
-      // return-home leg, so it can't be used as a clock.
-      const departLast = lastStop
-        ? parseTime(lastStop.departureTime)
-        : parseTime(startTime);
-
-      bestDay.stops.push({
-        storeId: planned.storeId,
-        storeName: planned.storeName,
-        lat: planned.lat,
-        lng: planned.lng,
-        visitDuration,
-        travelTimeFromPrev: Math.round(travelMin * 10) / 10,
-        distanceFromPrev: Math.round(distanceKm * 10) / 10,
-        arrivalTime: formatTime(departLast + travelMin),
-        departureTime: formatTime(departLast + travelMin + visitDuration),
-        sequence: bestDay.stops.length + 1,
-      });
-
-      // The day ends somewhere new now, so the leg home is re-measured and
-      // every total rebuilt around it.
-      dropRoadGeometry(bestDay);
-      applyReturnLeg(bestDay, end, workingMinutes);
-
-      fitted.push(i);
-      break;
+      if (appendStop(bestDay, planned, startOf(bestDay), endOf(bestDay), startTime, workingMinutes)) {
+        fitted.push(i);
+        break;
+      }
     }
   }
 
@@ -1098,6 +1092,116 @@ async function rebalanceOverflow(
     storeName,
     reason,
   }));
+}
+
+
+/**
+ * Put one more call on the END of a day if the day can still hold it, with the
+ * leg in from the current last stop and the drive home re-measured from it.
+ * Returns false (and changes nothing) when it would run past the working day.
+ */
+function appendStop(
+  day: RouteDayPlan,
+  planned: RouteStop,
+  start: { lat: number; lng: number } | null,
+  end: { lat: number; lng: number } | null,
+  startTime: string,
+  workingMinutes: number,
+  extraVisit = false
+): boolean {
+  const lastStop = day.stops[day.stops.length - 1];
+  const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : start;
+  // Real leg from wherever the day currently ends, not a flat 10 km.
+  const distanceKm = from ? haversineKm(from.lat, from.lng, planned.lat, planned.lng) : 0;
+  const travelMin = driveMinutes(distanceKm);
+  const visitDuration = planned.visitDuration;
+
+  // What the day WOULD cost with this store on the end: the current total,
+  // less the leg home it holds now, plus the new leg in, the visit, and the
+  // longer drive home from the store just added. Comparing against the old
+  // total alone let a store on at the far edge of the territory look free.
+  const newReturnMin = end ? driveMinutes(haversineKm(planned.lat, planned.lng, end.lat, end.lng)) : 0;
+  const prospective = day.totalTime - (day.returnTravelTime ?? 0) + travelMin + visitDuration + newReturnMin;
+  if (prospective > workingMinutes) return false;
+
+  // Arrive after the last stop departs. totalTravelTime includes the
+  // return-home leg, so it can't be used as a clock.
+  const departLast = lastStop ? parseTime(lastStop.departureTime) : parseTime(startTime);
+  day.stops.push({
+    storeId: planned.storeId,
+    storeName: planned.storeName,
+    lat: planned.lat,
+    lng: planned.lng,
+    visitDuration,
+    travelTimeFromPrev: Math.round(travelMin * 10) / 10,
+    distanceFromPrev: Math.round(distanceKm * 10) / 10,
+    arrivalTime: formatTime(departLast + travelMin),
+    departureTime: formatTime(departLast + travelMin + visitDuration),
+    sequence: day.stops.length + 1,
+    ...(extraVisit ? { extraVisit: true } : {}),
+  });
+  dropRoadGeometry(day);
+  // The day ends somewhere new now, so the leg home is re-measured and
+  // every total rebuilt around it.
+  applyReturnLeg(day, end, workingMinutes);
+  return true;
+}
+
+/** A planned stop for a store, before any timing is known. Undefined without valid GPS. */
+function stopFromStore(store: Store): RouteStop | undefined {
+  const fix = parseLatLng(store.gpsLat, store.gpsLng);
+  if (!fix) return undefined;
+  return {
+    storeId: store.id,
+    storeName: store.name,
+    lat: fix.lat,
+    lng: fix.lng,
+    visitDuration: store.duration || 30,
+    travelTimeFromPrev: 0,
+    distanceFromPrev: 0,
+    arrivalTime: "00:00",
+    departureTime: "00:00",
+    sequence: 0,
+  };
+}
+
+/**
+ * Minimum calls a day, "top up with extra calls": bring each short day up to
+ * the minimum with an EXTRA visit to the rep's stores near that day
+ * (same side of home / overnight stay), nearest first, while the clock allows.
+ * Extra visits are marked so nobody mistakes them for the store's frequency.
+ */
+function fillShortDays(
+  dayPlans: RouteDayPlan[],
+  routable: Store[],
+  nearStay: (s: Store) => boolean,
+  startOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
+  endOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
+  startTime: string,
+  workingMinutes: number,
+  minCalls: number
+): void {
+  const byId = new Map(routable.map((st) => [st.id, st]));
+  // iRam has no store sales to rank by, so any of the rep's stores, nearest first.
+  const pool = routable;
+  for (const day of dayPlans) {
+    if (day.stops.length === 0 || day.stops.length >= minCalls) continue;
+    const firstStore = byId.get(day.stops[0].storeId);
+    const away = firstStore ? nearStay(firstStore) : false;
+    const c = {
+      lat: day.stops.reduce((t, st) => t + st.lat, 0) / day.stops.length,
+      lng: day.stops.reduce((t, st) => t + st.lng, 0) / day.stops.length,
+    };
+    const candidates = pool
+      .filter((st) => nearStay(st) === away && !day.stops.some((x) => x.storeId === st.id))
+      .map((st) => ({ stop: stopFromStore(st)! }))
+      .filter((x) => x.stop)
+      .sort((x, y) => haversineKm(c.lat, c.lng, x.stop.lat, x.stop.lng) - haversineKm(c.lat, c.lng, y.stop.lat, y.stop.lng));
+    for (const { stop } of candidates) {
+      if (day.stops.length >= minCalls) break;
+      appendStop(day, stop, startOf(day), endOf(day), startTime, workingMinutes, true);
+    }
+  }
 }
 
 // ──────────────────────────────────────────────

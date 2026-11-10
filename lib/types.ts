@@ -207,6 +207,16 @@ export interface Rep {
    */
   stayGpsLat?: string;
   stayGpsLng?: string;
+  /** This rep must see at least this many calls a day. Unset = no minimum. */
+  minCallsPerDay?: number;
+  /**
+   * When the rep's stores can't fill the minimum:
+   *   pack = fewer, fuller days (free days left over);
+   *   flag = keep the days, mark the short ones;
+   *   fill = top short days up with extra visits to nearby better stores.
+   * Short days are flagged in every mode. Default flag.
+   */
+  minCallsMode?: MinCallsMode;
   teamId: string;
   workingHoursPerDay?: number; // default 8.5
   assignedChannels?: string[]; // channel IDs for channel_dedicated strategy
@@ -619,7 +629,17 @@ export const DEFAULT_CALL_CYCLE_TYPES: CallCycleType[] = [
 
 // ---------- Route Plan Types ----------
 
+export type MinCallsMode = "pack" | "flag" | "fill";
+
+export const MIN_CALLS_MODE_LABELS: Record<MinCallsMode, string> = {
+  pack: "Fewer, fuller days",
+  flag: "Flag short days",
+  fill: "Top up with extra calls",
+};
+
 export interface RouteStop {
+  /** An extra visit added to reach the rep's minimum calls a day, beyond the store's frequency. */
+  extraVisit?: boolean;
   storeId: string;
   storeName: string;
   lat: number;
@@ -653,6 +673,8 @@ export interface RouteDayPlan {
    * the day is longer than the rep's hours instead of quietly dropping a store.
    */
   overrunMinutes?: number;
+  /** Calls short of the rep's minimum calls a day. Absent when the day meets it. */
+  underMinimumBy?: number;
   /**
    * The drive from the last stop back to the rep's start point.
    *
@@ -682,6 +704,11 @@ export interface RouteDayPlan {
 export interface RepRoutePlan {
   repCode: string;
   repName: string;
+  /** The rep's minimum calls a day this plan was built on (capped by callsPerDay). */
+  minCallsPerDay?: number;
+  minCallsMode?: MinCallsMode;
+  /** Days left empty so the others reach the minimum ("pack" mode). */
+  freeDays?: { week: WeekLabel; day: DayLabel }[];
   // Which kind of call this plan is for. Absent on plans generated before
   // visit roles existed — treat those as the primary sales role.
   visitRoleId?: string;

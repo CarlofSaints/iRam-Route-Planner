@@ -472,6 +472,12 @@ export const GUIDE: GuideSection[] = [
       {
         kind: "note",
         tone: "info",
+        title: "A minimum calls a day, per rep",
+        text: "On the Reps page, Edit a rep and set Min Calls/Day, then choose what happens when their stores can't fill it. Fewer, fuller days packs the week into fewer days so every planned day reaches the minimum, and shows the rest as Free day on the Routes page (it never packs so tight that a day goes past the working hours or the calls-per-day target). Flag short days keeps the week as it is. Top up with extra calls adds an extra visit to the rep's nearest stores to that day, marked extra call, on top of the store's normal frequency. Whatever you choose, a day still short of the minimum shows how many calls short it is in red. Regenerate routes after changing it.",
+      },
+      {
+        kind: "note",
+        tone: "info",
         title: "Why the ordering sometimes differs between runs",
         text: "Where possible the system asks Google for real road distances, which is what makes a day's order genuinely efficient rather than merely tidy on a map. A large all-reps run has a time budget: once it is spent, the remaining reps are ordered by straight-line distance instead, so the run always completes. Generating for a single rep always gets the full road-based treatment.",
       },

@@ -47,6 +47,8 @@ export interface MyStop {
   distanceFromPrev: number;
   arrivalTime: string;
   departureTime: string;
+  /** Added to reach the rep's minimum calls a day, beyond the store's frequency. */
+  extraVisit?: boolean;
 }
 
 export interface MyDay {
@@ -114,6 +116,7 @@ export function shapeDay(day: DayWithReturn, home: { lat: number; lng: number } 
       distanceFromPrev: s.distanceFromPrev,
       arrivalTime: s.arrivalTime,
       departureTime: s.departureTime,
+      extraVisit: s.extraVisit,
     })),
     polyline: day.polyline,
     startLatLng: day.startLatLng,

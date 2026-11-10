@@ -967,7 +967,16 @@ export default function RoutesPage() {
                                   {(cellTotals(plan).totalMinutes / 60).toFixed(1)}h |{" "}
                                   {Math.round(cellTotals(plan).distanceKm)}km
                                 </div>
+                                {plan.underMinimumBy && (
+                                  <div className="mt-0.5 text-[11px] font-medium text-red-600">
+                                    {plan.underMinimumBy} short of min
+                                  </div>
+                                )}
                               </>
+                            ) : currentPlan.freeDays?.some((f) => f.week === week && f.day === day) ? (
+                              <div className="text-xs text-gray-500" title="Left free so the other days reach the rep's minimum calls a day">
+                                Free day
+                              </div>
                             ) : (
                               <div className="text-xs">—</div>
                             )}
@@ -1040,6 +1049,14 @@ export default function RoutesPage() {
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-gray-900 text-sm truncate">
                     {stop.storeName}
+                    {stop.extraVisit && (
+                      <span
+                        className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700"
+                        title="Added to reach the rep's minimum calls a day, on top of the store's normal frequency"
+                      >
+                        extra call
+                      </span>
+                    )}
                   </p>
                   <p className="text-xs text-gray-500">
                     arrive {stop.arrivalTime}, depart {stop.departureTime},{" "}
@@ -1097,7 +1114,7 @@ export default function RoutesPage() {
           {/* Summary bar */}
           <div
             className={`mt-4 rounded-lg px-4 py-2.5 text-xs font-medium ${
-              selectedTotals!.overBy
+              selectedTotals!.overBy || selectedDayPlan.underMinimumBy
                 ? "bg-red-50 text-red-700"
                 : "bg-green-50 text-green-700"
             }`}
@@ -1117,6 +1134,11 @@ export default function RoutesPage() {
                 overrun is against the same total the bar prints — and so the
                 drive home is inside it. A day that fits until the rep starts
                 driving home does not fit. */}
+            {selectedDayPlan.underMinimumBy && (
+              <span className="ml-1 text-red-700">
+                | {selectedDayPlan.underMinimumBy} short of the rep&apos;s minimum of {currentPlan!.minCallsPerDay} calls
+              </span>
+            )}
             {selectedTotals!.overBy !== null && (
               <span className="ml-1">
                 {`| OVER the working day by ${
