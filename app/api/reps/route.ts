@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getReps, saveReps } from "@/lib/data";
-import { Rep } from "@/lib/types";
+import { Rep, MinCallsMode } from "@/lib/types";
 import { getSession, requirePermission } from "@/lib/auth";
 import { logActivity } from "@/lib/activityLog";
 
@@ -62,6 +62,8 @@ export async function PUT(request: NextRequest) {
     if (updates.homeGpsLng !== undefined) reps[idx].homeGpsLng = updates.homeGpsLng;
     if (updates.teamId !== undefined) reps[idx].teamId = updates.teamId;
     if (updates.workingHoursPerDay !== undefined) reps[idx].workingHoursPerDay = updates.workingHoursPerDay;
+    if (updates.minCallsPerDay !== undefined) reps[idx].minCallsPerDay = cleanMinCalls(updates.minCallsPerDay);
+    if (updates.minCallsMode !== undefined) reps[idx].minCallsMode = cleanMinMode(updates.minCallsMode);
     if (updates.assignedChannels !== undefined) reps[idx].assignedChannels = updates.assignedChannels;
     if (updates.visitRoleId !== undefined) reps[idx].visitRoleId = updates.visitRoleId || undefined;
     await saveReps(reps);
@@ -101,6 +103,8 @@ export async function POST(request: NextRequest) {
       homeGpsLng: body.homeGpsLng || "",
       teamId: body.teamId || "",
       workingHoursPerDay: body.workingHoursPerDay ?? 8.5,
+      minCallsPerDay: cleanMinCalls(body.minCallsPerDay),
+      minCallsMode: cleanMinMode(body.minCallsMode),
       ...(body.visitRoleId ? { visitRoleId: body.visitRoleId } : {}),
     };
     reps.push(newRep);
@@ -131,4 +135,14 @@ export async function DELETE(request: NextRequest) {
   } catch (err) {
     return authFailure(err) || NextResponse.json({ error: String(err) }, { status: 500 });
   }
+}
+
+/** A whole number of calls, capped at 30; blank, 0 or junk means no minimum. */
+function cleanMinCalls(v: unknown): number | undefined {
+  const n = Math.round(Number(v));
+  return v !== null && v !== "" && Number.isFinite(n) && n >= 1 ? Math.min(n, 30) : undefined;
+}
+
+function cleanMinMode(v: unknown): MinCallsMode | undefined {
+  return v === "pack" || v === "flag" || v === "fill" ? v : undefined;
 }

@@ -281,7 +281,14 @@ export default function MyRoutePage() {
                       {i + 1}
                     </span>
                     <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-gray-900">{s.storeName}</div>
+                      <div className="truncate text-sm font-medium text-gray-900">
+                        {s.storeName}
+                        {s.extraVisit && (
+                          <span className="ml-2 rounded bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                            extra call
+                          </span>
+                        )}
+                      </div>
                       <div className="text-xs text-gray-500">
                         {s.arrivalTime} to {s.departureTime} · {Math.round(s.distanceFromPrev)} km,{" "}
                         {fmtMinutes(s.travelTimeFromPrev)} drive
