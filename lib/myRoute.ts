@@ -62,6 +62,9 @@ export interface MyDay {
   travelMinutes: number;
   returnKm: number | null;
   returnMinutes: number | null;
+  /** Set when this day starts and ends at the rep's overnight stay, not home. */
+  startLatLng?: { lat: number; lng: number };
+  endLatLng?: { lat: number; lng: number };
 }
 
 export interface MyPlan {
@@ -81,6 +84,8 @@ export interface MyStore {
 }
 
 export function shapeDay(day: DayWithReturn, home: { lat: number; lng: number } | null): MyDay {
+  // A day that ends at the overnight stay measures its last leg to there.
+  home = day.endLatLng ?? home;
   const first = day.stops[0];
   const last = day.stops[day.stops.length - 1];
   const stopsKm = day.stops.reduce((s, st) => s + st.distanceFromPrev, 0);
@@ -111,6 +116,8 @@ export function shapeDay(day: DayWithReturn, home: { lat: number; lng: number } 
       departureTime: s.departureTime,
     })),
     polyline: day.polyline,
+    startLatLng: day.startLatLng,
+    endLatLng: day.endLatLng,
     calls: day.stops.length,
     // The plan records no departure from home: it is the first arrival less
     // the drive out.

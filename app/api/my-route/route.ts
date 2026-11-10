@@ -3,6 +3,7 @@ import { getRoutes, getStores, getVisitRoles } from "@/lib/data";
 import { requireSession } from "@/lib/auth";
 import { resolveOwnRep } from "@/lib/ownRep";
 import { parseRepHome } from "@/lib/saCoordinates";
+import { haversineKm } from "@/lib/latlng";
 import { getRoleForRep } from "@/lib/repStores";
 import { plansForRep, shapePlan, storesForRepAnyRole } from "@/lib/myRoute";
 
@@ -39,7 +40,13 @@ export async function GET() {
 
     return NextResponse.json(
       {
-        rep: { code: rep.code, name: rep.name, hasHome: !!currentHome, roleName: ownRole.name },
+        rep: {
+          code: rep.code,
+          name: rep.name,
+          hasHome: !!currentHome,
+          roleName: ownRole.name,
+          stayOutOfDate: stayOutOfDate(rep, plansForRep(doc, rep.code)),
+        },
         generatedAt: doc?.generatedAt ?? null,
         plans,
         stores: storesForRepAnyRole(stores, rep.code, ownRole.name, visitRoles, plannedIds),
@@ -51,4 +58,19 @@ export async function GET() {
     if (msg.includes("Unauthorized")) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
     return NextResponse.json({ error: msg }, { status: 500 });
   }
+}
+
+/**
+ * True when a plan's overnight stay was moved or removed after it was built,
+ * so the page can say the route is out of date instead of routing to the old spot.
+ * (A stay set but not yet used by any day is not flagged: no plan day to compare.)
+ */
+function stayOutOfDate(
+  rep: { stayGpsLat?: string; stayGpsLng?: string },
+  plans: { days: { startLatLng?: { lat: number; lng: number }; endLatLng?: { lat: number; lng: number } }[] }[]
+): boolean {
+  const used = plans.flatMap((p) => p.days).map((d) => d.startLatLng ?? d.endLatLng).find(Boolean);
+  if (!used) return false;
+  const stay = parseRepHome(rep.stayGpsLat, rep.stayGpsLng);
+  return !stay || haversineKm(stay.lat, stay.lng, used.lat, used.lng) > 0.5;
 }

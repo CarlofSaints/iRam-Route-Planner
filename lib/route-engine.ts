@@ -126,6 +126,17 @@ export async function generateRepRoute(
   // point thousands of kilometres from the patch; the centroid is a far better
   // guess, and the pages flag it the same way they flag a missing home.
   const home = parseRepHome(rep.homeGpsLat, rep.homeGpsLng) ?? storeCentroid(routable);
+  // Second start point: a rep working away stays over and does the rest of the
+  // calls from there. Each day starts from whichever is nearer its stores.
+  const stay = home ? parseRepHome(rep.stayGpsLat, rep.stayGpsLng) : null;
+  const nearStay = (s: Store) => {
+    if (!stay || !home) return false;
+    const p = parseLatLng(s.gpsLat, s.gpsLng)!;
+    return haversineKm(p.lat, p.lng, stay.lat, stay.lng) < haversineKm(p.lat, p.lng, home.lat, home.lng);
+  };
+  /** Where a built day ends: the stay when marked, else home. */
+  const endOf = (plan: RouteDayPlan) => plan.endLatLng ?? home;
+  const lostReported = new Set<string>();
   const workingMinutes = (rep.workingHoursPerDay ?? DEFAULT_WORKING_HOURS) * 60;
 
   // Step 1: Distribute stores across weeks based on frequency
@@ -135,7 +146,13 @@ export async function generateRepRoute(
   const dayPlans: RouteDayPlan[] = [];
   const unassigned: OverflowCandidate[] = [];
   /** Every day that has stores, gathered before any of them is optimised. */
-  const pending: { week: WeekLabel; dayIdx: number; dayStores: Store[] }[] = [];
+  const pending: {
+    week: WeekLabel;
+    dayIdx: number;
+    dayStores: Store[];
+    start: { lat: number; lng: number } | null;
+    end: { lat: number; lng: number } | null;
+  }[] = [];
 
   for (const week of WEEKS) {
     const weekStores = weekAssignments.get(week) || [];
@@ -154,18 +171,66 @@ export async function generateRepRoute(
     // A store called on several times a week is pinned to fixed days FIRST, so
     // the balancer knows how much room each day has left. Pinning after the
     // balance would silently push days back over the target.
+    // Second start point: stores nearer the overnight stay get their own block
+    // of days at the END of the week, so the away days run back to back and
+    // the trip out and back is charged once (the first away day leaves from
+    // home, the last one drives home). Away days are in proportion to stores.
+    const awayCount = weekStores.filter(nearStay).length;
+    const awayDays =
+      awayCount === 0
+        ? 0
+        : Math.min(
+            awayCount === weekStores.length ? DAYS.length : DAYS.length - 1,
+            Math.max(1, Math.round((DAYS.length * awayCount) / weekStores.length))
+          );
+    const homeDayIdx = DAYS.map((_, i) => i).slice(0, DAYS.length - awayDays);
+    const awayDayIdx = DAYS.map((_, i) => i).slice(DAYS.length - awayDays);
+
     const pinnedPerDay = [0, 0, 0, 0, 0];
     const pins: Store[][] = [[], [], [], [], []];
     for (const store of multiDay) {
-      for (const dayIdx of spreadAcrossDays(getVisitsPerWeek(store.frequency || "monthly"))) {
-        pins[dayIdx].push(store);
-        pinnedPerDay[dayIdx]++;
+      // A rep away at the stay cannot call on a home store those days (and vice
+      // versa), so the visits spread over the store's own side only.
+      const away = nearStay(store);
+      const sideDays = away ? awayDayIdx : homeDayIdx;
+      const visits = getVisitsPerWeek(store.frequency || "monthly");
+      for (const pos of spreadAcrossDays(visits, sideDays.length)) {
+        pins[sideDays[pos]].push(store);
+        pinnedPerDay[sideDays[pos]]++;
+      }
+      const lost = Math.min(visits, DAYS.length) - sideDays.length;
+      if (lost > 0 && !lostReported.has(store.id)) {
+        lostReported.add(store.id);
+        unassigned.push({
+          storeId: store.id,
+          storeName: store.name,
+          reason: `${lost} of its weekly calls fall on days spent ${
+            away ? "at home" : "away at the overnight stay"
+          }`,
+        });
       }
     }
 
-    // Cluster into 5 day groups. The target and the already-pinned stores go
-    // in together: the balancer needs both to know how much room a day has.
-    const clusters = clusterIntoDays(singleDay, home, { callsPerDay, pinnedPerDay });
+    // Cluster each side into its own days. The target and the already-pinned
+    // stores go in together: the balancer needs both to know how much room a
+    // day has.
+    const clusters: Store[][] = [[], [], [], [], []];
+    const sides: [number[], Store[], { lat: number; lng: number } | null][] = [
+      [homeDayIdx, singleDay.filter((s) => !nearStay(s)), home],
+      [awayDayIdx, singleDay.filter(nearStay), stay],
+    ];
+    for (const [sideDays, sideStores, ref] of sides) {
+      if (sideDays.length === 0) continue;
+      const sideClusters = clusterIntoDays(sideStores, ref, {
+        callsPerDay,
+        pinnedPerDay: sideDays.map((d) => pinnedPerDay[d]),
+        days: sideDays.length,
+      });
+      sideDays.forEach((d, i) => (clusters[d] = sideClusters[i] ?? []));
+    }
+    // Away block: first day drives out from home, last day drives back home.
+    const startOf = (dayIdx: number) => (awayDays > 1 && dayIdx > awayDayIdx[0] ? stay : home);
+    const endAt = (dayIdx: number) => (awayDays > 1 && dayIdx < DAYS.length - 1 && dayIdx >= awayDayIdx[0] ? stay : home);
 
     for (let dayIdx = 0; dayIdx < pins.length; dayIdx++) {
       for (const store of pins[dayIdx]) (clusters[dayIdx] ||= []).push(store);
@@ -174,7 +239,7 @@ export async function generateRepRoute(
     for (let dayIdx = 0; dayIdx < DAYS.length; dayIdx++) {
       const dayStores = clusters[dayIdx] || [];
       if (dayStores.length === 0) continue;
-      pending.push({ week, dayIdx, dayStores });
+      pending.push({ week, dayIdx, dayStores, start: startOf(dayIdx), end: endAt(dayIdx) });
     }
   }
 
@@ -193,8 +258,12 @@ export async function generateRepRoute(
   const builtPlans = await mapWithConcurrency(
     pending,
     GOOGLE_CONCURRENCY,
-    ({ week, dayIdx, dayStores }) =>
-      buildDayPlan(dayStores, home, week, DAYS[dayIdx], startTime, workingMinutes, googleDeadline)
+    async ({ week, dayIdx, dayStores, start, end }) => {
+      const plan = await buildDayPlan(dayStores, start, end, week, DAYS[dayIdx], startTime, workingMinutes, googleDeadline);
+      if (start && start !== home) plan.startLatLng = start;
+      if (end && end !== home) plan.endLatLng = end;
+      return plan;
+    }
   );
 
   {
@@ -209,9 +278,9 @@ export async function generateRepRoute(
       // dropping the eighth store and looking like the setting was ignored.
       // Without a target, the old time-based trim is untouched.
       const removed = callsPerDay && callsPerDay > 0
-        ? trimToCount(plan, callsPerDay, workingMinutes, home)
+        ? trimToCount(plan, callsPerDay, workingMinutes, endOf(plan))
         : plan.overCapacity
-          ? trimToCapacity(plan, workingMinutes, home)
+          ? trimToCapacity(plan, workingMinutes, endOf(plan))
           : [];
       for (const r of removed) {
         // Carry the whole planned stop, not just its name. It already holds
@@ -236,7 +305,8 @@ export async function generateRepRoute(
   const stillUnassigned = await rebalanceOverflow(
     dayPlans,
     unassigned,
-    home,
+    (plan) => plan.startLatLng ?? home,
+    endOf,
     startTime,
     workingMinutes,
     callsPerDay
@@ -288,11 +358,12 @@ export async function generateRepRoute(
  * not just extra volume — two visits on consecutive days is not the same
  * coverage as two visits three days apart.
  */
-function spreadAcrossDays(visitsPerWeek: number): number[] {
-  const n = Math.max(1, Math.min(visitsPerWeek, DAYS.length));
+function spreadAcrossDays(visitsPerWeek: number, dayCount: number = DAYS.length): number[] {
+  if (dayCount <= 0) return [];
+  const n = Math.max(1, Math.min(visitsPerWeek, dayCount));
   if (n === 1) return [0];
-  if (n >= DAYS.length) return DAYS.map((_, i) => i);
-  const last = DAYS.length - 1;
+  if (n >= dayCount) return Array.from({ length: dayCount }, (_, i) => i);
+  const last = dayCount - 1;
   const days = new Set<number>();
   for (let i = 0; i < n; i++) days.add(Math.round((i * last) / (n - 1)));
   return [...days].sort((a, b) => a - b);
@@ -363,8 +434,10 @@ export interface GeoStore {
 export function clusterIntoDays(
   stores: Store[],
   home: { lat: number; lng: number } | null,
-  opts: { callsPerDay?: number; pinnedPerDay?: number[] } = {}
+  opts: { callsPerDay?: number; pinnedPerDay?: number[]; days?: number } = {}
 ): Store[][] {
+  const K = opts.days ?? 5;
+  const empty = () => Array.from({ length: K }, (): Store[] => []);
   const geoStores: GeoStore[] = stores
     .map((s) => ({
       store: s,
@@ -373,18 +446,17 @@ export function clusterIntoDays(
     }))
     .filter((g) => !isNaN(g.lat) && !isNaN(g.lng));
 
-  if (geoStores.length === 0) return [[], [], [], [], []];
+  if (geoStores.length === 0) return empty();
 
   // For very small sets, just distribute evenly. Round-robin already respects
   // any sane target, because five stores over five days cannot exceed one a day.
-  if (geoStores.length <= 5) {
-    const clusters: Store[][] = [[], [], [], [], []];
-    geoStores.forEach((g, i) => clusters[i % 5].push(g.store));
+  if (geoStores.length <= K) {
+    const clusters = empty();
+    geoStores.forEach((g, i) => clusters[i % K].push(g.store));
     return clusters;
   }
 
-  // K-Means clustering with K=5
-  const K = 5;
+  // K-Means clustering, one cluster per day
   const maxIterations = 20;
 
   // Initialize centroids using K-means++ style
@@ -616,6 +688,7 @@ export function balanceClusters(
 async function buildDayPlan(
   stores: Store[],
   home: { lat: number; lng: number } | null,
+  end: { lat: number; lng: number } | null,
   week: WeekLabel,
   day: DayLabel,
   startTime: string,
@@ -638,7 +711,7 @@ async function buildDayPlan(
   const withinBudget = googleDeadline === undefined || Date.now() < googleDeadline;
   if (hasGoogleMapsKey() && home && storePoints.length > 0 && withinBudget) {
     const waypoints = storePoints.map((s) => ({ lat: s.lat, lng: s.lng }));
-    const result = await getOptimizedRoute(home, home, waypoints);
+    const result = await getOptimizedRoute(home, end ?? home, waypoints);
 
     if (result) {
       // Reorder stores by Google's optimized order
@@ -650,13 +723,13 @@ async function buildDayPlan(
       polyline = result.polyline;
     } else {
       // Fallback to Haversine
-      const nn = nearestNeighborOrder(storePoints, home);
+      const nn = nearestNeighborOrder(storePoints, home, end);
       orderedStores = nn.ordered;
       legs = nn.legs;
     }
   } else {
     // Haversine nearest-neighbor
-    const nn = nearestNeighborOrder(storePoints, home);
+    const nn = nearestNeighborOrder(storePoints, home, end);
     orderedStores = nn.ordered;
     legs = nn.legs;
   }
@@ -707,8 +780,8 @@ async function buildDayPlan(
   // in one of them and missing from another. Google's own last leg is handed
   // over when it exists — it is a real road distance, and re-measuring it as a
   // straight line here would throw that away.
-  const lastLeg = home ? legs[orderedStores.length] : undefined;
-  applyReturnLeg(plan, home, workingMinutes, lastLeg);
+  const lastLeg = end ? legs[orderedStores.length] : undefined;
+  applyReturnLeg(plan, end, workingMinutes, lastLeg);
   return plan;
 }
 
@@ -768,7 +841,8 @@ function applyReturnLeg(
 
 function nearestNeighborOrder(
   stores: { store: Store; lat: number; lng: number }[],
-  home: { lat: number; lng: number } | null
+  home: { lat: number; lng: number } | null,
+  end: { lat: number; lng: number } | null = home
 ): {
   ordered: typeof stores;
   legs: { distanceKm: number; durationMin: number }[];
@@ -807,9 +881,9 @@ function nearestNeighborOrder(
   }
 
   // Add return-home leg
-  if (home && ordered.length > 0) {
+  if (end && ordered.length > 0) {
     const last = ordered[ordered.length - 1];
-    const returnDist = haversineKm(last.lat, last.lng, home.lat, home.lng);
+    const returnDist = haversineKm(last.lat, last.lng, end.lat, end.lng);
     legs.push({
       distanceKm: returnDist,
       durationMin: (returnDist / DEFAULT_SPEED_KMH) * 60,
@@ -921,7 +995,8 @@ type OverflowCandidate = {
 async function rebalanceOverflow(
   dayPlans: RouteDayPlan[],
   unassigned: OverflowCandidate[],
-  home: { lat: number; lng: number } | null,
+  startOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
+  endOf: (plan: RouteDayPlan) => { lat: number; lng: number } | null,
   startTime: string,
   workingMinutes: number,
   callsPerDay?: number
@@ -932,40 +1007,33 @@ async function rebalanceOverflow(
   for (let i = stillUnassigned.length - 1; i >= 0; i--) {
     const store = stillUnassigned[i];
 
-    // Find day with most remaining capacity
-    let bestDay: RouteDayPlan | null = null;
-    let bestRemaining = 0;
+    // Without the original stop there is no way to know where this store IS.
+    // Placing it regardless is what wrote lat/lng 0,0 into saved plans and
+    // drew real stores in the Gulf of Guinea. Leaving it unassigned is
+    // honest — the plan reports it, an invented coordinate does not.
+    const planned = store.stop;
+    if (!planned) continue;
 
-    for (const plan of dayPlans) {
+    // Every day with room, roomiest first. Trying only the single roomiest day
+    // failed whenever that day was in the other area (home vs overnight stay),
+    // even though a nearer day had room.
+    const candidates = dayPlans
       // 🔴 Only the week the store was trimmed from, and never a day that
       // already holds it. Refitting onto "any day with room" put a weekly
-      // store on two days of one week and none of another, or a 2x/week store
-      // twice on one day, and reported nothing unassigned. When no such day
-      // has room the store stays unassigned: reported, not misplaced.
-      if (store.week && plan.week !== store.week) continue;
-      if (plan.stops.some((s) => s.storeId === store.storeId)) continue;
+      // store on two days of one week and none of another.
+      .filter((plan) => !(store.week && plan.week !== store.week))
+      .filter((plan) => !plan.stops.some((s) => s.storeId === store.storeId))
       // A day already at the target has no room, however much clock is left.
       // Without this the refit pass would quietly undo the cap it just applied.
-      if (callsPerDay && callsPerDay > 0 && plan.stops.length >= callsPerDay) continue;
-      const remaining = workingMinutes - plan.totalTime;
-      if (remaining > bestRemaining) {
-        bestRemaining = remaining;
-        bestDay = plan;
-      }
-    }
+      .filter((plan) => !(callsPerDay && callsPerDay > 0 && plan.stops.length >= callsPerDay))
+      // Need at least 30 min for a visit + some travel
+      .filter((plan) => workingMinutes - plan.totalTime > 45)
+      .sort((a, b) => a.totalTime - b.totalTime);
 
-    // Need at least 30 min for a visit + some travel
-    if (bestDay && bestRemaining > 45) {
-      const planned = store.stop;
-
-      // Without the original stop there is no way to know where this store IS.
-      // Placing it regardless is what wrote lat/lng 0,0 into saved plans and
-      // drew real stores in the Gulf of Guinea. Leaving it unassigned is
-      // honest — the plan reports it, an invented coordinate does not.
-      if (!planned) continue;
-
+    for (const bestDay of candidates) {
+      const end = endOf(bestDay);
       const lastStop = bestDay.stops[bestDay.stops.length - 1];
-      const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : home;
+      const from = lastStop ? { lat: lastStop.lat, lng: lastStop.lng } : startOf(bestDay);
       // Real leg from wherever the day currently ends, not a flat 10 km.
       const distanceKm = from
         ? haversineKm(from.lat, from.lng, planned.lat, planned.lng)
@@ -977,8 +1045,8 @@ async function rebalanceOverflow(
       // less the leg home it holds now, plus the new leg in, the visit, and the
       // longer drive home from the store just added. Comparing against the old
       // total alone let a store on at the far edge of the territory look free.
-      const newReturnMin = home
-        ? driveMinutes(haversineKm(planned.lat, planned.lng, home.lat, home.lng))
+      const newReturnMin = end
+        ? driveMinutes(haversineKm(planned.lat, planned.lng, end.lat, end.lng))
         : 0;
       const prospective =
         bestDay.totalTime -
@@ -987,34 +1055,34 @@ async function rebalanceOverflow(
         visitDuration +
         newReturnMin;
 
-      if (prospective <= workingMinutes) {
-        // Arrive after the last stop departs. totalTravelTime includes the
-        // return-home leg, so it can't be used as a clock.
-        const departLast = lastStop
-          ? parseTime(lastStop.departureTime)
-          : parseTime(startTime);
+      if (prospective > workingMinutes) continue;
 
-        bestDay.stops.push({
-          storeId: planned.storeId,
-          storeName: planned.storeName,
-          lat: planned.lat,
-          lng: planned.lng,
-          visitDuration,
-          travelTimeFromPrev: Math.round(travelMin * 10) / 10,
-          distanceFromPrev: Math.round(distanceKm * 10) / 10,
-          arrivalTime: formatTime(departLast + travelMin),
-          departureTime: formatTime(departLast + travelMin + visitDuration),
-          sequence: bestDay.stops.length + 1,
-        });
+      // Arrive after the last stop departs. totalTravelTime includes the
+      // return-home leg, so it can't be used as a clock.
+      const departLast = lastStop
+        ? parseTime(lastStop.departureTime)
+        : parseTime(startTime);
 
-        // The day ends somewhere new now, so the leg home is re-measured and
-        // every total rebuilt around it. Google's line never visited this
-        // stop, so it goes too.
-        dropRoadGeometry(bestDay);
-        applyReturnLeg(bestDay, home, workingMinutes);
+      bestDay.stops.push({
+        storeId: planned.storeId,
+        storeName: planned.storeName,
+        lat: planned.lat,
+        lng: planned.lng,
+        visitDuration,
+        travelTimeFromPrev: Math.round(travelMin * 10) / 10,
+        distanceFromPrev: Math.round(distanceKm * 10) / 10,
+        arrivalTime: formatTime(departLast + travelMin),
+        departureTime: formatTime(departLast + travelMin + visitDuration),
+        sequence: bestDay.stops.length + 1,
+      });
 
-        fitted.push(i);
-      }
+      // The day ends somewhere new now, so the leg home is re-measured and
+      // every total rebuilt around it.
+      dropRoadGeometry(bestDay);
+      applyReturnLeg(bestDay, end, workingMinutes);
+
+      fitted.push(i);
+      break;
     }
   }
 

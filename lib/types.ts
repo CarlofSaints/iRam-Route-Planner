@@ -201,6 +201,12 @@ export interface Rep {
   homeAddress: string;
   homeGpsLat: string;
   homeGpsLng: string;
+  /**
+   * Second start point: where the rep stays over when working away from home.
+   * A day whose stores are nearer here than home starts and ends here instead.
+   */
+  stayGpsLat?: string;
+  stayGpsLng?: string;
   teamId: string;
   workingHoursPerDay?: number; // default 8.5
   assignedChannels?: string[]; // channel IDs for channel_dedicated strategy
@@ -663,6 +669,13 @@ export interface RouteDayPlan {
   returnTravelTime?: number; // minutes
   /** When the rep gets home, last stop's departure plus the leg home. */
   arriveHomeTime?: string; // "HH:mm"
+  /**
+   * Set only when this day starts / ends at the rep's overnight stay rather
+   * than home. Away days run back to back: the first leaves from home and ends
+   * at the stay, the last starts at the stay and drives home.
+   */
+  startLatLng?: { lat: number; lng: number };
+  endLatLng?: { lat: number; lng: number };
   polyline?: string; // encoded Google polyline
 }
 

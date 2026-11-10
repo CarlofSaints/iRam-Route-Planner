@@ -56,23 +56,29 @@ function FitToDay({ points, fitKey }: { points: [number, number][]; fitKey: stri
 
 export default function MyRouteMap({
   home,
+  end = home,
   stops,
   polyline,
   fitKey,
 }: {
   home: { lat: number; lng: number } | null;
+  /** Where the day ends when it isn't where it started (an overnight stay). */
+  end?: { lat: number; lng: number } | null;
   stops: MyStop[];
   polyline?: string;
   fitKey: string;
 }) {
   const stopPoints = stops.map((s) => [s.lat, s.lng] as [number, number]);
   const homePoint = home ? ([home.lat, home.lng] as [number, number]) : null;
-  const all = homePoint ? [homePoint, ...stopPoints] : stopPoints;
+  const endPoint = end ? ([end.lat, end.lng] as [number, number]) : null;
+  const ends = [homePoint, ...stopPoints, endPoint].filter((p): p is [number, number] => !!p);
+  const all = ends;
+  const sameEnd = !endPoint || !homePoint || (endPoint[0] === homePoint[0] && endPoint[1] === homePoint[1]);
 
   // A saved Google polyline is the real drive. Without one we can only join
   // the calls in order, drawn dashed so it is never mistaken for the road.
   const road = polyline ? decodePolyline(polyline) : null;
-  const order = homePoint ? [homePoint, ...stopPoints, homePoint] : stopPoints;
+  const order = ends;
 
   return (
     <MapContainer
@@ -99,7 +105,12 @@ export default function MyRouteMap({
 
       {homePoint && (
         <Marker position={homePoint} icon={homeIcon}>
-          <Popup>Home: your day starts and ends here</Popup>
+          <Popup>{sameEnd ? "Your day starts and ends here" : "Your day starts here"}</Popup>
+        </Marker>
+      )}
+      {endPoint && !sameEnd && (
+        <Marker position={endPoint} icon={homeIcon}>
+          <Popup>Your day ends here</Popup>
         </Marker>
       )}
       {stops.map((s, i) => (

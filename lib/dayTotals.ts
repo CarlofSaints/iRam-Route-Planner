@@ -39,6 +39,8 @@ export function dayTotals(
   home: { lat: number; lng: number } | null | undefined,
   workingHoursPerDay?: number
 ): DayTotals {
+  // A day that ends at the overnight stay measures its last leg to there.
+  home = day.endLatLng ?? home;
   const first = day.stops[0];
   const last = day.stops[day.stops.length - 1];
 

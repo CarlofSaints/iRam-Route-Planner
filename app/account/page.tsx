@@ -26,6 +26,8 @@ interface RepProfile {
   homeGpsLat: string;
   homeGpsLng: string;
   hasCoordinates: boolean;
+  stayGpsLat: string;
+  stayGpsLng: string;
 }
 
 /**
@@ -92,6 +94,7 @@ export default function AccountPage() {
   // The pin map opens there so the rep only nudges it onto their house.
   const [approx, setApprox] = useState<{ lat: number; lng: number } | null>(null);
   const [picking, setPicking] = useState(false);
+  const [pickingStay, setPickingStay] = useState(false);
 
   useEffect(() => {
     fetch("/api/account")
@@ -149,6 +152,53 @@ export default function AccountPage() {
       setApprox({ lat: data.approx.lat, lng: data.approx.lng });
       setPicking(true);
     }
+  };
+
+  /** The overnight stay: a pin, a device fix, or clear. Never touches the home. */
+  const saveStay = async (payload: { lat?: number; lng?: number; clear?: boolean }) => {
+    setHomeMessage("");
+    setHomeError("");
+    setHomeSaving(true);
+    let res: Response;
+    let data: { error?: string; note?: string; rep?: RepProfile } = {};
+    try {
+      res = await fetch("/api/account/rep-profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ target: "stay", ...payload }),
+      });
+      data = await res.json().catch(() => ({}));
+    } catch {
+      setHomeError("No connection. Try again when you have signal.");
+      return;
+    } finally {
+      setHomeSaving(false);
+    }
+    if (!res.ok || !data.rep) {
+      setHomeError(data.error || "Could not save where you're staying");
+      return;
+    }
+    setRep(data.rep);
+    if (data.note) setHomeMessage(data.note);
+  };
+
+  const useCurrentLocationForStay = () => {
+    if (!navigator.geolocation) {
+      setHomeError("This device can't share its location. Drop a pin instead.");
+      return;
+    }
+    setLocating(true);
+    navigator.geolocation.getCurrentPosition(
+      async (p) => {
+        setLocating(false);
+        await saveStay({ lat: p.coords.latitude, lng: p.coords.longitude });
+      },
+      () => {
+        setLocating(false);
+        setHomeError("Couldn't get your location. Allow location for this site, or drop a pin instead.");
+      },
+      { enableHighAccuracy: true, timeout: 20000 }
+    );
   };
 
   const saveAddress = async () => {
@@ -492,6 +542,62 @@ export default function AccountPage() {
                 await saveHome({ homeAddress, lat, lng, source: "map" });
                 setApprox(null);
                 setHomeSaving(false);
+              }}
+            />
+          )}
+
+          {/* Second start point: reps who travel to an area, stay over, and work from there */}
+          <div className="mt-5 border-t border-gray-100 pt-4">
+            <h3 className="text-xs font-semibold text-gray-700">Staying over somewhere? (optional)</h3>
+            <p className="mt-1 text-xs text-gray-500">
+              If you travel to an area and stay over, set where you stay. Days with stores closer to there than to
+              home will start and end there.
+            </p>
+            {rep.stayGpsLat && rep.stayGpsLng ? (
+              <p className="mt-2 text-xs text-gray-700">
+                <strong className="font-semibold">Overnight stay set</strong> at{" "}
+                {Number(rep.stayGpsLat).toFixed(5)}, {Number(rep.stayGpsLng).toFixed(5)}.
+              </p>
+            ) : (
+              <p className="mt-2 text-xs text-gray-500">Not set. Every day starts from home.</p>
+            )}
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                onClick={useCurrentLocationForStay}
+                disabled={locating || homeSaving}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Use my current location
+              </button>
+              <button
+                onClick={() => setPickingStay(true)}
+                disabled={locating || homeSaving}
+                className="rounded-lg border border-gray-300 px-3 py-1.5 text-xs font-medium text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                Drop a pin where I stay
+              </button>
+              {rep.stayGpsLat && (
+                <button
+                  onClick={() => saveStay({ clear: true })}
+                  disabled={locating || homeSaving}
+                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-red-600 hover:bg-red-50 disabled:opacity-50"
+                >
+                  Remove overnight stay
+                </button>
+              )}
+            </div>
+          </div>
+
+          {pickingStay && (
+            <PinDropMap
+              storeName="where you stay over"
+              nearby={[]}
+              startAtMe
+              initial={rep.stayGpsLat ? { lat: Number(rep.stayGpsLat), lng: Number(rep.stayGpsLng) } : null}
+              onCancel={() => setPickingStay(false)}
+              onPick={async (lat, lng) => {
+                setPickingStay(false);
+                await saveStay({ lat, lng });
               }}
             />
           )}

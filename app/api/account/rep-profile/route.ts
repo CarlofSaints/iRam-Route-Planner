@@ -33,6 +33,8 @@ function publicView(rep: Rep) {
     homeGpsLat: rep.homeGpsLat || "",
     homeGpsLng: rep.homeGpsLng || "",
     hasCoordinates: !!((rep.homeGpsLat || "").trim() && (rep.homeGpsLng || "").trim()),
+    stayGpsLat: rep.stayGpsLat || "",
+    stayGpsLng: rep.stayGpsLng || "",
   };
 }
 
@@ -83,6 +85,29 @@ export async function PUT(request: NextRequest) {
     const reps = await getReps();
     const idx = reps.findIndex((r) => r.id === rep.id);
     if (idx === -1) return NextResponse.json({ error: "Rep not found" }, { status: 404 });
+
+    // Second start point (overnight stay). Its own branch so it can never touch the home.
+    if ((body as { target?: string }).target === "stay") {
+      const clear = (body as { clear?: boolean }).clear === true;
+      if (!clear && !(typeof lat === "number" && typeof lng === "number" && isPlausibleCoordinate(lat, lng))) {
+        return NextResponse.json({ error: "Those coordinates aren't a real place. Try again." }, { status: 400 });
+      }
+      reps[idx].stayGpsLat = clear ? "" : String(lat);
+      reps[idx].stayGpsLng = clear ? "" : String(lng);
+      await saveReps(reps);
+      logActivity({
+        action: "Rep updated own profile",
+        actor: session.email,
+        actorName: session.name,
+        summary: `${reps[idx].name} (${reps[idx].code}) ${clear ? "removed" : "set"} their overnight stay`,
+      });
+      return NextResponse.json({
+        rep: publicView(reps[idx]),
+        note: clear
+          ? "Removed. Every day now starts from home."
+          : "Saved. Days with stores closer to here than home will start and end here. Ask your manager to regenerate routes.",
+      });
+    }
 
     const hasDeviceFix = typeof lat === "number" && typeof lng === "number";
     if (hasDeviceFix && !isPlausibleCoordinate(lat, lng)) {
